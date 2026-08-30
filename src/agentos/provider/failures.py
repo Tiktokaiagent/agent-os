@@ -87,6 +87,18 @@ def _is_context_overflow(text: str) -> bool:
             "input exceeds",
             "provider_request_budget_exhausted",
             "too many tokens",
+            # Anthropic-specific
+            "prompt_too_long",
+            "exceed context limit",
+            "request_too_large",
+            "request size exceeds",
+            # Anthropic API error format
+            "input length and max_tokens exceed context limit",
+            # OpenAI
+            "maximum context length exceeded",
+            # Gemini
+            "token count exceeds",
+            "max_input_tokens",
         )
     )
 

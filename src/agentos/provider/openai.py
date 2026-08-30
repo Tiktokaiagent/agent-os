@@ -90,6 +90,19 @@ def _provider_display_name(provider_kind: str) -> str:
         "zhipu": "Zhipu",
         "qianfan": "Qianfan",
         "volcengine": "Volcengine",
+        "azure": "Azure OpenAI",
+        "bailian_coding": "Bailian Coding",
+        "mistral": "Mistral",
+        "groq": "Groq",
+        "siliconflow": "SiliconFlow",
+        "aihubmix": "AIHubMix",
+        "minimax": "MiniMax",
+        "minimax_openai": "MiniMax (OpenAI-compatible)",
+        "byteplus": "BytePlus",
+        "bankr": "Bankr",
+        "vllm": "vLLM",
+        "lm_studio": "LM Studio",
+        "ovms": "OVMS",
     }.get(provider_kind, "Provider")
 
 

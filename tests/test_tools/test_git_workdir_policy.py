@@ -50,3 +50,36 @@ def test_git_rejects_foreign_commit_file_on_windows(
 
     with pytest.raises(ToolError, match="foreign_host_path"):
         git._reject_foreign_git_path("/Users/a1/Desktop/repo/file.py")
+
+
+def test_git_diff_argv_unstaged_without_path() -> None:
+    from agentos.tools.builtin.git import _git_diff_argv
+
+    assert _git_diff_argv({}) == ("git", "diff")
+    assert _git_diff_argv({"staged": False, "path": None}) == ("git", "diff")
+
+
+def test_git_diff_argv_staged_without_path() -> None:
+    from agentos.tools.builtin.git import _git_diff_argv
+
+    assert _git_diff_argv({"staged": True}) == ("git", "diff", "--cached")
+    assert _git_diff_argv({"staged": True, "path": None}) == ("git", "diff", "--cached")
+
+
+def test_git_diff_argv_unstaged_with_path() -> None:
+    from agentos.tools.builtin.git import _git_diff_argv
+
+    assert _git_diff_argv({"path": "src/main.py"}) == (
+        "git", "diff", "--", "src/main.py",
+    )
+    assert _git_diff_argv({"staged": False, "path": "src/"}) == (
+        "git", "diff", "--", "src/",
+    )
+
+
+def test_git_diff_argv_staged_with_path() -> None:
+    from agentos.tools.builtin.git import _git_diff_argv
+
+    assert _git_diff_argv({"staged": True, "path": "src/main.py"}) == (
+        "git", "diff", "--cached", "--", "src/main.py",
+    )

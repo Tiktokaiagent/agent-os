@@ -50,3 +50,21 @@ def test_git_rejects_foreign_commit_file_on_windows(
 
     with pytest.raises(ToolError, match="foreign_host_path"):
         git._reject_foreign_git_path("/Users/a1/Desktop/repo/file.py")
+
+
+def test_git_log_argv_without_path() -> None:
+    from agentos.tools.builtin.git import _git_log_argv
+
+    assert _git_log_argv({}) == ("git", "log", "--max-count=10")
+    assert _git_log_argv({"count": 5, "path": None}) == ("git", "log", "--max-count=5")
+
+
+def test_git_log_argv_with_path() -> None:
+    from agentos.tools.builtin.git import _git_log_argv
+
+    assert _git_log_argv({"count": 5, "path": "src/main.py"}) == (
+        "git", "log", "--max-count=5", "--", "src/main.py",
+    )
+    assert _git_log_argv({"count": 10, "path": "src/"}) == (
+        "git", "log", "--max-count=10", "--", "src/",
+    )

@@ -6,6 +6,8 @@ import asyncio
 import os
 from pathlib import Path
 
+from typing import Any
+
 from agentos.redact import redact_sensitive_text
 from agentos.sandbox.integration import get_runtime, run_under_backend, sandboxed
 from agentos.sandbox.policy import build_policy, select_level
@@ -207,25 +209,45 @@ async def git_commit(
     return await _run_git("commit", "-m", message, cwd=cwd)
 
 
+def _git_log_argv(a: dict[str, Any]) -> tuple[str, ...]:
+    """Build a valid git-log argv for the sandbox decorator."""
+    argv = ["git", "log", f"--max-count={int(a.get('count', 10))}"]
+    path = a.get("path")
+    if path:
+        argv += ["--", str(path)]
+    return tuple(argv)
+
+
 @tool(
     name="git_log",
-    description="Show recent git commit log.",
+    description="Show recent git commit log, optionally scoped to a file or directory path.",
     params={
         "count": {"type": "integer", "description": "Number of commits to show (default 10)."},
+        "path": {
+            "type": "string",
+            "description": "Limit commit log to this file or directory path.",
+        },
         "workdir": {"type": "string", "description": "Git repository directory (default: cwd)."},
     },
     required=[],
 )
 @sandboxed(
     kind="git.read",
-    argv_factory=lambda a: ("git", "log", str(a.get("count", 10))),
+    argv_factory=_git_log_argv,
     record_payload=False,
 )
-async def git_log(count: int = 10, workdir: str | None = None) -> str:
-    return await _run_git(
+async def git_log(
+    count: int = 10,
+    path: str | None = None,
+    workdir: str | None = None,
+) -> str:
+    args = [
         "log",
         f"--max-count={count}",
         "--oneline",
         "--decorate",
-        cwd=_effective_workdir(workdir),
-    )
+    ]
+    if path:
+        _reject_foreign_git_path(path)
+        args += ["--", path]
+    return await _run_git(*args, cwd=_effective_workdir(workdir))

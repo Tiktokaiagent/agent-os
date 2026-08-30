@@ -325,6 +325,10 @@ class MemorySyncManager:
                     )
             except Exception:
                 logger.warning("sync_manager.index_failed", path=rel_path)
+                # Requeue: remove the path from _mtimes so the next watcher
+                # tick sees it as new and retries indexing.
+                self._mtimes.pop(rel_path, None)
+                self._dirty = True
 
         return failed_deletes
 

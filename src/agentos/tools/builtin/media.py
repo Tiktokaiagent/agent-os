@@ -310,7 +310,10 @@ async def _fetch_image_url(url: str) -> tuple[bytes, str]:
                 location = resp.headers.get("location")
                 await resp.aclose()
                 if not location:
-                    break
+                    raise ToolError(
+                        "Redirect response missing Location header — "
+                        "cannot follow redirect without a target URL"
+                    )
                 current_url = urljoin(str(resp.url), location)
             else:
                 raise ToolError(f"Too many redirects (>{_MAX_REDIRECTS})")

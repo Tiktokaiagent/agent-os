@@ -66,3 +66,55 @@ async def test_fetch_image_small_body_ok(monkeypatch: pytest.MonkeyPatch) -> Non
     data, mime = await _fetch_image_url("https://example.com/small.png")
     assert mime == "image/png"
     assert data == _png_header()
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_redirect_missing_location_raises_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 302 redirect without Location header raises ToolError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={})
+
+    _patch_network(monkeypatch, handler)
+
+    with pytest.raises(ToolError, match="missing Location header"):
+        await _fetch_image_url("https://example.com/redirect-no-location.png")
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_redirect_follows_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 302 redirect with Location header follows and returns the image."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/redirect.png":
+            return httpx.Response(302, headers={"location": "/final.png"})
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_png_header())
+
+    _patch_network(monkeypatch, handler)
+
+    data, mime = await _fetch_image_url("https://example.com/redirect.png")
+    assert mime == "image/png"
+    assert data == _png_header()
+
+
+@pytest.mark.asyncio
+async def test_fetch_image_too_many_redirects_raises_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """More than MAX_REDIRECTS redirects raises ToolError."""
+
+    redirect_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal redirect_count
+        redirect_count += 1
+        return httpx.Response(302, headers={"location": "/loop"})
+
+    _patch_network(monkeypatch, handler)
+
+    with pytest.raises(ToolError, match="Too many redirects"):
+        await _fetch_image_url("https://example.com/redirect-loop.png")

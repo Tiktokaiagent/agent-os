@@ -290,3 +290,75 @@ def test_new_transient_status_codes_match_via_text(message: str) -> None:
         classify_provider_error("openrouter", None, message=message)
         is ProviderFailureKind.PROVIDER_OVERLOADED
     )
+
+
+# -- Policy refusal markers (provider-specific) -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "status_code", "raw_code", "message", "desc"),
+    [
+        (
+            "azure",
+            400,
+            "content_filter",
+            "The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+            "Azure OpenAI content filter error",
+        ),
+        (
+            "openai",
+            400,
+            "",
+            "The prompt was flagged by content filter and violates safety policy",
+            "OpenAI content filter violation",
+        ),
+        (
+            "azure",
+            400,
+            "responsible_ai_policy",
+            "Request blocked due to responsible_ai_policy violation",
+            "Responsible AI policy violation",
+        ),
+        (
+            "gemini",
+            400,
+            "",
+            "The response was blocked due to safety_ratings",
+            "Gemini safety rating block",
+        ),
+        (
+            "deepseek",
+            400,
+            "",
+            "The request was rejected for sensitive_content",
+            "DeepSeek sensitive content",
+        ),
+        (
+            "anthropic",
+            400,
+            "",
+            "Your request was blocked because it contains harmful_content",
+            "Anthropic harmful content",
+        ),
+        (
+            "openai",
+            400,
+            "",
+            "The prompt was blocked by safety system",
+            "OpenAI safety system block",
+        ),
+    ],
+    ids=lambda v: v if isinstance(v, str) and len(v) < 40 else None,
+)
+def test_provider_specific_policy_refusal_markers(
+    provider: str,
+    status_code: int,
+    raw_code: str,
+    message: str,
+    desc: str,
+) -> None:
+    """Provider-specific policy refusal messages must classify as POLICY_REFUSAL."""
+    assert (
+        classify_provider_error(provider, status_code, raw_code=raw_code, message=message)
+        is ProviderFailureKind.POLICY_REFUSAL
+    ), f"Failed for: {desc}"

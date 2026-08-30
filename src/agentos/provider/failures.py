@@ -101,6 +101,23 @@ def _is_policy_refusal(text: str) -> bool:
             "moderation",
             "refusal",
             "blocked by policy",
+            # Azure OpenAI
+            "content_filter",
+            "content filter",
+            "responsible_ai_policy",
+            "content management policy",
+            # OpenAI
+            "flagged by content filter",
+            # Generic
+            "blocked by safety",
+            # Anthropic
+            "harmful_content",
+            # Gemini
+            "blocked",
+            "safety_rating",
+            "safety_ratings",
+            # DeepSeek
+            "sensitive_content",
         )
     )
 

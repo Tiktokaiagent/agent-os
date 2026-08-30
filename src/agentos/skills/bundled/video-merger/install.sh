@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
 echo "安装 video-merger 技能依赖..."
 
 # 检查并安装ffmpeg

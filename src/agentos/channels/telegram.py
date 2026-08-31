@@ -514,7 +514,7 @@ class TelegramChannel:
                     request_kwargs["timeout"] = request_timeout
                 response = await client.post(f"/bot{self.config.token}/{method}", **request_kwargs)
                 break
-            except httpx.TransportError:
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
                 if retry_delay is None:
                     raise TelegramApiError(f"Telegram {method} connection failed") from None
                 log.warning(

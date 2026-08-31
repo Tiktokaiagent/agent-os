@@ -36,6 +36,56 @@ async def test_telegram_api_retries_connect_error_before_sending() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ConnectTimeout("dns timed out"),
+        httpx.PoolTimeout("no pooled connection"),
+    ],
+)
+async def test_telegram_api_retries_connect_timeout_and_pool_timeout(exc: httpx.RequestError) -> None:
+    """ConnectTimeout and PoolTimeout are retried, just like ConnectError."""
+    channel = TelegramChannel(TelegramChannelConfig(token="token"))
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=[exc, _Response()])
+    channel._client = client
+    channel._owns_client = False
+
+    with patch("agentos.channels.telegram.asyncio.sleep", new=AsyncMock()) as sleep:
+        result = await channel._api("sendMessage", {"chat_id": "1", "text": "hello"})
+
+    assert result == {"id": 1}
+    assert client.post.await_count == 2
+    sleep.assert_awaited_once_with(0.25)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.WriteTimeout("write timed out"),
+        httpx.ReadTimeout("read timed out"),
+    ],
+)
+async def test_telegram_api_does_not_retry_write_or_read_timeout(exc: httpx.RequestError) -> None:
+    """WriteTimeout/ReadTimeout raise immediately — retrying risks double-send."""
+    channel = TelegramChannel(TelegramChannelConfig(token="token"))
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=[exc, _Response()])
+    channel._client = client
+    channel._owns_client = False
+
+    with (
+        patch("agentos.channels.telegram.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(TelegramApiError),
+    ):
+        await channel._api("sendMessage", {"chat_id": "1", "text": "hello"})
+
+    # Only 1 attempt — no retry
+    assert client.post.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_telegram_long_poll_timeout_has_network_headroom() -> None:
     channel = TelegramChannel(TelegramChannelConfig(token="token", poll_timeout_s=30))
     client = AsyncMock()

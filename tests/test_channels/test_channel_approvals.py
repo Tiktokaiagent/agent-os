@@ -243,6 +243,53 @@ async def test_slack_interactive_payload_unsigned_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_slack_event_callback_unsigned_rejected() -> None:
+    """Regression: signing_secret=None must reject event_callback JSON with 401 (#674)."""
+    channel = SlackChannel(token="xoxb-test", slack_channel_id="C12345", signing_secret=None)
+
+    # Mock JSON POST with event_callback
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "headers": [(b"content-type", b"application/json")],
+    }
+    req = Request(scope)
+
+    async def mock_body():
+        return b'{"type":"event_callback","event":{"type":"message","text":"pwned"}}'
+
+    req.body = mock_body
+
+    resp = await channel._handle_webhook(req)
+    assert resp.status_code == 401
+
+    # Verify no event was ingested — receive should block (no message enqueued)
+    import asyncio
+
+    with pytest.raises(asyncio.TimeoutError):
+        async with asyncio.timeout(0.1):
+            await channel.receive()
+
+    # Also verify that url_verification still works (harmless, needed for setup)
+    scope2 = {
+        "type": "http",
+        "method": "POST",
+        "headers": [(b"content-type", b"application/json")],
+    }
+    req2 = Request(scope2)
+
+    async def mock_verification():
+        return b'{"type":"url_verification","challenge":"ch4ll3ng3"}'
+
+    req2.body = mock_verification
+
+    resp2 = await channel._handle_webhook(req2)
+    assert resp2.status_code == 200
+    body = json.loads(resp2.body)
+    assert body["challenge"] == "ch4ll3ng3"
+
+
+@pytest.mark.asyncio
 async def test_discord_component_interaction_handling() -> None:
     queue = get_approval_queue()
     approval_id = queue.request("exec", {"argv": ["rm", "-rf"], "action_kind": "exec"})

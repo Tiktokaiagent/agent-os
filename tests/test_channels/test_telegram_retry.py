@@ -43,7 +43,9 @@ async def test_telegram_api_retries_connect_error_before_sending() -> None:
         httpx.PoolTimeout("no pooled connection"),
     ],
 )
-async def test_telegram_api_retries_connect_timeout_and_pool_timeout(exc: httpx.RequestError) -> None:
+async def test_telegram_api_retries_connect_timeout_and_pool_timeout(
+    exc: httpx.RequestError,
+) -> None:
     """ConnectTimeout and PoolTimeout are retried, just like ConnectError."""
     channel = TelegramChannel(TelegramChannelConfig(token="token"))
     client = AsyncMock()

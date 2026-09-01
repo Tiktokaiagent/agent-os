@@ -139,6 +139,33 @@ _AGENTOS_POSTURE_NAMES = (
     "AGENTOS_HTTP_DOWNLOAD_LIMIT",
 )
 
+# Group 5 — proxy names (case-insensitive enforcement). httpx normalises
+# every ``*_proxy`` env var name to lowercase before reading, so a mixed-case
+# spelling bypasses the exact-match check. These are matched via
+# ``_case_insensitive_denied()`` instead of the literal denylist.
+#
+# ``AGENTOS_TRUST_ENV`` gates ``env.trust_env()``, the call site that makes
+# AgentOS httpx clients honour the ``*_PROXY`` vars. Blocking proxies alone
+# is insufficient if an agent can first turn on trust and then supply the
+# proxy — both must be blocked together.
+_PROXY_NAMES: tuple[str, ...] = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "AGENTOS_LLM_PROXY",
+    "AGENTOS_TRUST_ENV",
+)
+
+#: Upper-cased groups for case-insensitive denial.
+_CASE_INSENSITIVE_DENY_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset(n.upper() for n in _PROXY_NAMES),
+)
+
 #: Names that may never be written through an AgentOS surface.
 WRITE_DENYLIST: frozenset[str] = frozenset(
     _LOADER_NAMES + _INTERPRETER_NAMES + _SHELL_NAMES + _AGENTOS_POSTURE_NAMES
@@ -146,10 +173,11 @@ WRITE_DENYLIST: frozenset[str] = frozenset(
 
 _DENY_MESSAGE = (
     "Environment variable {key!r} cannot be written through AgentOS. Names that "
-    "steer subprocess execution (PATH, LD_PRELOAD, PYTHONPATH, EDITOR, ...) or "
+    "steer subprocess execution (PATH, LD_PRELOAD, PYTHONPATH, EDITOR, ...), "
     "AgentOS runtime posture (AGENTOS_AGENT_PERMISSIONS, AGENTOS_GATEWAY_TOKEN, "
-    "...) are refused so this surface cannot escalate its own privileges. Edit "
-    "~/.agentos/.env directly if you genuinely need to set it."
+    "...), or proxy/trust settings (HTTP_PROXY, AGENTOS_LLM_PROXY, "
+    "AGENTOS_TRUST_ENV, ...) are refused so this surface cannot escalate its own "
+    "privileges. Edit ~/.agentos/.env directly if you genuinely need to set it."
 )
 
 
@@ -166,15 +194,30 @@ def assert_valid_name(key: str) -> None:
         )
 
 
+def _case_insensitive_denied(key: str) -> bool:
+    """Return whether *key* matches any case-insensitive deny group.
+
+    Used for proxy names where httpx normalises to lowercase regardless of
+    the spelling the caller used, so ``Http_Proxy``, ``http_proxy``, and
+    ``HTTP_PROXY`` must all be blocked.
+    """
+    upper = key.upper()
+    return any(upper in group for group in _CASE_INSENSITIVE_DENY_GROUPS)
+
+
 def is_writable(key: str) -> bool:
     """Return whether *key* may be written through an AgentOS surface."""
-    return bool(ENV_NAME_RE.match(key)) and key not in WRITE_DENYLIST
+    return (
+        bool(ENV_NAME_RE.match(key))
+        and key not in WRITE_DENYLIST
+        and not _case_insensitive_denied(key)
+    )
 
 
 def assert_writable(key: str) -> None:
     """Raise :class:`EnvPolicyError` unless *key* passes the name and deny gates."""
     assert_valid_name(key)
-    if key in WRITE_DENYLIST:
+    if key in WRITE_DENYLIST or _case_insensitive_denied(key):
         raise EnvPolicyError(_DENY_MESSAGE.format(key=key))
 
 

@@ -73,6 +73,47 @@ class TestDenylist:
         assert env_policy.is_writable(name) is True
         env_policy.assert_writable(name)
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # proxy vars that must be denied
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "AGENTOS_LLM_PROXY",
+            # trust env — gates the proxy injection path
+            "AGENTOS_TRUST_ENV",
+        ],
+    )
+    def test_proxy_and_trust_env_names_are_refused(self, name: str) -> None:
+        assert env_policy.is_writable(name) is False
+        with pytest.raises(EnvPolicyError, match="cannot be written through AgentOS"):
+            env_policy.assert_writable(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # httpx normalizes proxies to lowercase; mixed-case variants must
+            # also be blocked or they bypass the literal denylist check.
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "Http_Proxy",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+        ],
+    )
+    def test_proxy_names_are_refused_case_insensitively(self, name: str) -> None:
+        """httpx lowercases proxy var names, so mixed-case variants must be
+        blocked to prevent a case-mutation bypass."""
+        assert env_policy.is_writable(name) is False
+        with pytest.raises(EnvPolicyError, match="cannot be written through AgentOS"):
+            env_policy.assert_writable(name)
+
     def test_invalid_name_is_not_writable_even_when_absent_from_denylist(self) -> None:
         assert env_policy.is_writable("1BAD") is False
 

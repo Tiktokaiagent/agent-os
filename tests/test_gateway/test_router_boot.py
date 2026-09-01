@@ -1244,3 +1244,45 @@ async def test_start_gateway_server_wires_hooks(tmp_path) -> None:
     finally:
         await server.close()
 
+
+def test_build_turn_runner_from_services_populates_turn_runner_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_turn_runner_from_services must populate svc._turn_runner_ref
+    so _on_memory_write can call refresh_memory_snapshot on the active
+    TurnRunner. Covers the CLI and standalone TUI paths (#761)."""
+    from types import SimpleNamespace
+
+    from agentos.gateway import boot
+
+    refresh_called: list[str] = []
+
+    class MockTurnRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def refresh_memory_snapshot(self, agent_id: str) -> None:
+            refresh_called.append(agent_id)
+
+    monkeypatch.setattr("agentos.engine.runtime.TurnRunner", MockTurnRunner)
+
+    services = SimpleNamespace(
+        provider_selector=object(),
+        tool_registry=object(),
+        session_manager=object(),
+        skill_loader=object(),
+        usage_tracker=object(),
+        config=GatewayConfig(),
+    )
+
+    # Call build_turn_runner_from_services like CLI/standalone paths do
+    runner = boot.build_turn_runner_from_services(services)
+
+    # The TurnRunner must be in _turn_runner_ref
+    assert hasattr(services, "_turn_runner_ref")
+    assert services._turn_runner_ref == [runner]
+
+    # Simulate _on_memory_write — must call refresh_memory_snapshot
+    services._turn_runner_ref[0].refresh_memory_snapshot("main")
+    assert refresh_called == ["main"]
+

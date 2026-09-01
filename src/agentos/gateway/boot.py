@@ -2042,7 +2042,7 @@ def build_turn_runner_from_services(
     def _standalone_lock_provider(session_key: str) -> _asyncio.Lock:
         return _standalone_locks.setdefault(session_key, _asyncio.Lock())
 
-    return TurnRunner(
+    turn_runner = TurnRunner(
         provider_selector=svc.provider_selector,
         tool_registry=svc.tool_registry,
         session_manager=svc.session_manager,
@@ -2062,6 +2062,15 @@ def build_turn_runner_from_services(
         compaction_hooks=getattr(svc, "compaction_hooks", None),
         tool_hooks=getattr(svc, "tool_hooks", None),
     )
+    # Populate the deferred callback ref so memory write callbacks can
+    # refresh memory snapshots on the active TurnRunner. Covers all three
+    # callers at once (gateway, CLI agent, standalone TUI) — see #761.
+    # Create the list if it does not exist yet (CLI/standalone paths that
+    # call build_turn_runner_from_services directly without build_services).
+    if not hasattr(svc, "_turn_runner_ref"):
+        svc._turn_runner_ref = []  # type: ignore[attr-defined]
+    svc._turn_runner_ref.append(turn_runner)
+    return turn_runner
 
 
 async def start_gateway_server(
@@ -2180,9 +2189,8 @@ async def start_gateway_server(
         config=config,
         diagnostics_state=diagnostics_state,
     )
-    # Patch deferred callback so memory writes refresh TurnRunner snapshots
-    if hasattr(svc, "_turn_runner_ref"):
-        svc._turn_runner_ref.append(turn_runner)  # type: ignore[attr-defined]
+    # _turn_runner_ref is now populated inside build_turn_runner_from_services,
+    # which covers all three callers (gateway, CLI agent, standalone TUI).
 
     # Lazy ref for channel_manager — cron handler captures it via closure,
     # populated after channel_manager is constructed below.

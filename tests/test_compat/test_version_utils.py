@@ -76,3 +76,21 @@ def test_ordering_is_total_and_sortable() -> None:
         "2026.7.18.post1",
         "2026.7.19",
     ]
+
+
+def test_bare_dev_sorts_before_final_release() -> None:
+    assert compare_versions("2026.7.18.dev", "2026.7.18") == -1
+
+
+def test_dev_pre_sorts_before_release_candidate() -> None:
+    assert compare_versions("2026.7.18rc1.dev1", "2026.7.18rc1") == -1
+
+
+def test_is_newer_detects_final_newer_than_dev() -> None:
+    assert is_newer("2026.7.18", "2026.7.18.dev") is True
+
+
+def test_parse_version_fills_dev_fallback() -> None:
+    v = parse_version("2026.7.18.dev")
+    assert v.dev == 0
+    assert v.release == (2026, 7, 18)

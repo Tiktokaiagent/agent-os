@@ -63,10 +63,10 @@ class Version:
         if self.dev is not None and self.pre is None and self.post is None:
             phase: tuple[int, ...] = (0, self.dev)
         elif self.pre is not None:
-            dev_tie = -1 if self.dev is None else self.dev
+            dev_tie: int | float = self.dev if self.dev is not None else float("inf")
             phase = (1, self.pre[0], self.pre[1], dev_tie)
         elif self.post is not None:
-            dev_tie = -1 if self.dev is None else self.dev
+            dev_tie: int | float = self.dev if self.dev is not None else float("inf")
             phase = (3, self.post, dev_tie)
         else:
             phase = (2,)
@@ -101,6 +101,8 @@ def parse_version(value: str | None) -> Version:
     if post is None and re.search(r"[._-]?post", raw):
         post = 0
     dev = int(match.group("dev")) if match.group("dev") is not None else None
+    if dev is None and re.search(r"[._-]?dev", raw):
+        dev = 0
     return Version(raw=raw, release=release, pre=pre, post=post, dev=dev, parsed=True)
 
 

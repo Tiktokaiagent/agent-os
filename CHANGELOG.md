@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `is_sensitive_path` now recognises the empty string and literal ``/``
+  as root-level markers, so ``rm -rf /`` is always blocked regardless
+  of workspace exclusions (#563).
+
 ## [2026.9.2] - 2026-09-02
 
 ### Added

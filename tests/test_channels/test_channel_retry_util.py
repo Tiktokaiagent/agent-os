@@ -14,7 +14,6 @@ import pytest
 
 from agentos.channels._util import retry_request
 
-
 _REQUEST = httpx.Request("POST", "https://test.example/api")
 
 

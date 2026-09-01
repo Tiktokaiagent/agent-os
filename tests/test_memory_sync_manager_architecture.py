@@ -161,7 +161,7 @@ class _FailingStore:
         self.indexed: list[str] = []
         self._fail_count = 0
 
-    async def index_file(self, *, path: str, content: str, source: object) -> int:
+    async def index_file(self, *, path: str, content: str, source: object, mtime: float = 0) -> int:
         if self._fail_count < 1:
             self._fail_count += 1
             raise RuntimeError("transient indexing failure")

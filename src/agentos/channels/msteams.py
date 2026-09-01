@@ -76,6 +76,11 @@ def _default_workspace_dir() -> Path:
     return Path.home() / ".agentos"
 
 
+#: Hard cap on total accumulated stream text. Prevents runaway memory
+#: and O(n^2) degradation from unbounded string concatenation.
+_MAX_STREAM_ACCUMULATED_CHARS: int = 100_000
+
+
 class MSTeamsChannelConfig(BaseModel):
     """Adapter-level config for MS Teams.
 
@@ -517,7 +522,13 @@ class MSTeamsChannel:
         if ref is None:
             raise RuntimeError("MSTeamsChannel.send_streaming has no conversation reference cached")
 
-        accumulated = ""
+        chunks_list: list[str] = []
+        accumulated_len = 0
+
+        def _acc() -> str:
+            """Return the accumulated text so far."""
+            return "".join(chunks_list)
+
         message_id: str | None = None
         unsupported = False
         last_edit = 0.0
@@ -526,13 +537,16 @@ class MSTeamsChannel:
         async for chunk in chunks:
             if not chunk:
                 continue
-            accumulated += chunk
+            if accumulated_len >= _MAX_STREAM_ACCUMULATED_CHARS:
+                break
+            chunks_list.append(chunk)
+            accumulated_len += len(chunk)
 
             if message_id is None:
                 holder: dict[str, str | None] = {"id": None}
 
                 async def _send(turn_context: Any, _holder: dict[str, str | None] = holder) -> None:
-                    response = await turn_context.send_activity(accumulated)
+                    response = await turn_context.send_activity(_acc())
                     if response is not None and getattr(response, "id", None):
                         _holder["id"] = response.id
 
@@ -552,7 +566,7 @@ class MSTeamsChannel:
             current_message_id = message_id
 
             async def _edit(
-                turn_context: Any, _id: str = current_message_id, _text: str = accumulated
+                turn_context: Any, _id: str = current_message_id, _text: str = _acc()
             ) -> None:
                 updated = Activity(type="message", id=_id, text=_text)
                 await turn_context.update_activity(updated)
@@ -575,7 +589,7 @@ class MSTeamsChannel:
         # Final flush — emit one last full-text update if we have a message
         # and either the stream produced more content after the first send
         # or edits were unsupported and we never updated mid-stream.
-        if message_id is not None and accumulated:
+        if message_id is not None and _acc():
             final_callback: Any
             if unsupported:
                 # Channel doesn't support ``update_activity``. The
@@ -584,7 +598,7 @@ class MSTeamsChannel:
                 # message so the user gets the full reply (the partial
                 # first chunk stays in place but is no longer the only
                 # thing visible).
-                async def _final_send(turn_context: Any, _text: str = accumulated) -> None:
+                async def _final_send(turn_context: Any, _text: str = _acc()) -> None:
                     await turn_context.send_activity(_text)
 
                 final_callback = _final_send
@@ -592,7 +606,7 @@ class MSTeamsChannel:
                 final_message_id = message_id
 
                 async def _final_update(
-                    turn_context: Any, _id: str = final_message_id, _text: str = accumulated
+                    turn_context: Any, _id: str = final_message_id, _text: str = _acc()
                 ) -> None:
                     updated = Activity(type="message", id=_id, text=_text)
                     await turn_context.update_activity(updated)
@@ -613,7 +627,7 @@ class MSTeamsChannel:
                 # of only the first chunk that shipped at stream start.
                 self._streams_unsupported = True
 
-                async def _retry_send(turn_context: Any, _text: str = accumulated) -> None:
+                async def _retry_send(turn_context: Any, _text: str = _acc()) -> None:
                     await turn_context.send_activity(_text)
 
                 try:

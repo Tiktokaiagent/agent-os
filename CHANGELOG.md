@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `MSTeamsChannel.send_streaming` no longer accumulates unbounded stream
+  chunks via O(n²) string concatenation. A hard cap of 100 000 characters
+  (`_MAX_STREAM_ACCUMULATED_CHARS`) stops runaway memory and performance
+  degradation. Chunks beyond the cap are silently dropped (#732).
+
 ### Security
 
 - Proxy names are no longer writable through any AgentOS surface. `set_env_var`

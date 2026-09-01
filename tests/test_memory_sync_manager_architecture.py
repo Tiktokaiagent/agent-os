@@ -154,3 +154,43 @@ async def test_sync_passes_source_mtime_for_memory_and_knowledge_base_files(tmp_
 
     assert sorted(store.indexed) == ["MEMORY.md", "knowledge_base/guide.md"]
     assert store.mtimes == expected_mtimes
+class _FailingStore:
+    """Store that fails on first index_file call, succeeds on subsequent."""
+
+    def __init__(self) -> None:
+        self.indexed: list[str] = []
+        self._fail_count = 0
+
+    async def index_file(self, *, path: str, content: str, source: object) -> int:
+        if self._fail_count < 1:
+            self._fail_count += 1
+            raise RuntimeError("transient indexing failure")
+        self.indexed.append(path)
+        return 1
+
+    async def remove_file(self, path: str) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_failed_index_file_is_requeued_for_retry(tmp_path):
+    """When index_file raises, the path is removed from _mtimes so the next
+    sync retries it instead of skipping it as unchanged."""
+    workspace = tmp_path / "workspace"
+    memory = workspace / "memory"
+    memory.mkdir(parents=True)
+    (workspace / "MEMORY.md").write_text("root", encoding="utf-8")
+    store = _FailingStore()
+    manager = MemorySyncManager(store=store, workspace_dir=workspace, memory_dir=memory)
+
+    # First sync: index_file fails, but the path should be requeued
+    await manager.sync(reason="manual")
+
+    # First call failed, so nothing was indexed
+    assert store.indexed == []
+
+    # Second sync: mtime was popped, so the file is seen as new and re-indexed
+    await manager.sync(reason="manual")
+
+    assert store.indexed == ["MEMORY.md"]
+

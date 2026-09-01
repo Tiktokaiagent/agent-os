@@ -25,6 +25,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   AgentOS is refused (#550).
 
 ### Fixed
+- `GET /api/approvals` no longer bypasses rate-limiting entirely. It now
+  gets a dedicated per-IP bucket (default 300 req/60 s) so the Web UI poll
+  (~40 req/min/tab) fits comfortably without sharing the generic API bucket
+  and without leaving the endpoint unbounded (#569).
+
 
 - `upsert_llm_provider` now validates an operator-supplied provider `base_url`
   before it is persisted or handed to the httpx client. The RPC

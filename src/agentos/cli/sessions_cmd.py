@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,6 @@ from agentos.cli.chat.session_state import messages_to_markdown
 from agentos.cli.gateway_rpc import default_gateway_token, default_gateway_url, run_gateway_sync
 from agentos.cli.output import print_json
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, error_panel, markup_escape
-from agentos.session.manager import _safe_archive_part
 
 app = typer.Typer(help="Manage chat sessions.")
 
@@ -24,6 +24,56 @@ _ACTION_FAILED = object()
 
 # Rows pulled before a client-side --search filter runs.
 _SEARCH_FETCH_LIMIT = 500
+
+
+def _safe_export_filename(session_id: str) -> str:
+    r"""Sanitize *session_id* for use as a filename.
+
+    Strips all characters outside a strict safe set, matching the
+    approach used by :func:`_safe_archive_part` in the session manager.
+    The bare ``session_id.replace(':', '-')`` that preceded this function
+    let path separators (``/``, ``\``) pass through, enabling directory
+    traversal via a crafted session key.
+    """
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id).strip("-")
+    # Strip leading and trailing dots — a sanitised value that starts or
+    # ends with ``.`` (e.g. ``..-etc-pwned``) could still be misinterpreted
+    # as a hidden file or a parent-directory reference on case-insensitive
+    # filesystems. The inner dot stays so filenames like ``session.v2`` work.
+    safe = safe.strip(".")
+    return safe or "session"
+
+
+def _resolve_export_target(
+    session_id: str,
+    explicit_output: Path | None,
+    ext: str,
+) -> Path:
+    """Resolve the export output path, guarding against directory traversal.
+
+    Two attack surfaces:
+
+    1. **Session ID injection.** The raw *session_id* (which a remote gateway
+       returns) is sanitised via :func:`_safe_export_filename` before use.
+
+    2. **Explicit output path.** The ``--output`` CLI option is a
+       :class:`Path` that Typer resolves eagerly. An authenticated user could
+       pass ``--output ../../etc/pwned.json``. We resolve and verify the path
+       is within the working directory, rejecting any traversal outside it.
+    """
+    if explicit_output is not None:
+        explicit_output = explicit_output.expanduser().resolve()
+        cwd = Path.cwd().resolve()
+        try:
+            explicit_output.relative_to(cwd)
+        except ValueError:
+            raise typer.BadParameter(
+                f"Output path {explicit_output} is outside the working "
+                f"directory ({cwd}). Refusing to write there."
+            )
+        return explicit_output
+
+    return Path(f"{_safe_export_filename(session_id)}.{ext}")
 
 
 def _resolved_key(payload: dict[str, Any], fallback: str) -> str:
@@ -378,7 +428,7 @@ def sessions_export(
     if result is None:
         console.print("[red]Session export returned no data.[/red]")
         return
-    target = output or Path(f"{_safe_archive_part(session_id)}.{format}")
+    target = _resolve_export_target(session_id, output, format)
     if format == "json":
         target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     else:

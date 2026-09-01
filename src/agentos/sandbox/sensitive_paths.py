@@ -139,6 +139,19 @@ def is_sensitive_path(path: str) -> str | None:
         return None
     if not path:
         return None
+    # Root filesystem (bare ``/``, ``/``, ``//``, ``/*``) must be
+    # hard-blocked — ``rm -rf /`` wipes the host. Issue #563.
+    path_normalized = path.replace("\\", "/")
+    if path_normalized in ("/", "/.", "//", ".") or path_normalized.rstrip("/") == "":
+        return "/ (filesystem root)"
+    if path_normalized == "/*" or path_normalized.startswith("//"):
+        return "/ (filesystem root)"
+    for expanded in _comparison_path_candidates(path):
+        stripped = expanded.rstrip("/")
+        if stripped.endswith("/*"):
+            stripped = stripped[:-2].rstrip("/")
+        if stripped == "" or (len(stripped) == 2 and stripped[1] == ":"):
+            return "/ (filesystem root)"
     candidates = _comparison_path_candidates(path)
     for expanded in candidates:
         if (

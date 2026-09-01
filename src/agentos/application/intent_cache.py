@@ -18,67 +18,50 @@ from __future__ import annotations
 import os
 import re
 import shlex
-import threading
-import time
-from pathlib import Path
+from pathlib import Path, PurePath
+from time import time
 
-_DEFAULT_TTL_SECONDS = 30 * 60
-_ALWAYS_TTL_SECONDS = 365 * 24 * 3600  # effectively never expires within a session
-
-
-def _norm_path(raw: str, *, base_dir: str | Path | None = None) -> str:
-    """Best-effort absolute-path normalization.
-
-    Leaves non-path tokens alone (so ``*`` or variable references don't get
-    expanded into something wrong).
-    """
-    if not raw or raw.startswith(("$", "`")) or raw in {"*", "-"}:
-        return raw
-    try:
-        path = Path(raw).expanduser()
-        if base_dir is not None and not path.is_absolute():
-            path = Path(base_dir).expanduser() / path
-        return str(path.resolve(strict=False))
-    except (OSError, ValueError):
-        return raw
+# ── Shell split config ──────────────────────────────────────────────────────
+# Shell command separators. We split on these first so that only ``rm``
+# segments are scanned — a bare regex across the whole command could
+# capture ``cat``/``grep`` targets from non-rm segments.
+_SHELL_SEP_RE = re.compile(r";\s*|&&\s*|\|\|\s*|[|&](?:\s+|$)")
 
 
-# Regex-based single-capture extractors for Python-flavoured deletes. Each
-# regex uses ``finditer`` so ``shutil.rmtree("a"); os.remove("b")`` yields
-# both paths.
-_PY_DELETE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bos\.(?:remove|unlink|rmdir|removedirs)\s*\(\s*[\"']([^\"']+)[\"']"),
-    re.compile(r"\bshutil\.rmtree\s*\(\s*[\"']([^\"']+)[\"']"),
-    re.compile(
-        r"\b(?:pathlib\.)?Path\s*\(\s*[\"']([^\"']+)[\"']\s*\)\s*\.(?:unlink|rmdir)\s*\("
-    ),
-)
-
-# Shell command separators that terminate a single ``rm`` invocation.
-_SHELL_SEPARATORS = (";", "&&", "||", "|", "&")
-
+# ── rm target extractor ─────────────────────────────────────────────────────
 
 def _extract_rm_targets(command: str) -> list[str]:
     """Pull every non-flag argument out of every ``rm`` invocation.
 
-    Handles ``rm a b c``, ``rm -rf /a /b``, quoted paths, and stops at shell
-    separators. Uses ``finditer`` so ``rm foo; rm -rf /bar`` yields targets
-    from both invocations independently. Does not try to be a full shell
-    parser — falls back to whitespace split on shlex errors (unbalanced quotes).
+    Handles ``rm a b c``, ``rm -rf /a /b``, quoted paths, and splits the
+    command into segments first so that ``rm /tmp/safe; rm /root/.ssh/id_rsa``
+    yields the second rm's target while ``rm /tmp/safe && cat ~/.ssh/config``
+    does **not** scan ``config`` as an rm target.
+
+    The approach: split the full command on shell separators first, then
+    keep only segments whose first token is ``rm``. This avoids the
+    over-blocking bug in the previous implementation, where the flattened
+    ``rm(.*)`` regex captured non-rm commands after an rm segment.
+
+    Does not try to be a full shell parser — falls back to whitespace split
+    on shlex errors (unbalanced quotes).
     """
-    # Match each ``rm`` invocation, stopping at shell separators.
-    # ``[^;\n&|]*`` captures everything from ``rm`` up to the next separator
-    # or end-of-expression, so each ``rm`` is tokenized independently.
-    pattern = re.compile(r"\brm\b([^;\n&|]*)")
-    matches = list(pattern.finditer(command))
-    if not matches:
-        return []
+    segments = _SHELL_SEP_RE.split(command)
 
     targets: list[str] = []
     seen: set[str] = set()
 
-    for match in matches:
-        tail = match.group(1).strip()
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        if not re.match(r"^\s*rm\b", segment):
+            continue
+
+        tail_match = re.match(r"^\s*rm\b\s*(.*)", segment, re.DOTALL)
+        if not tail_match:
+            continue
+        tail = tail_match.group(1).strip()
         if not tail:
             continue
 
@@ -132,95 +115,100 @@ def _extract_intents(
 
 
 def _extract_intent(command: str) -> tuple[str, str] | None:
-    """First extracted intent, or None. Convenience for single-target callers."""
+    """Return the first (kind, target) or None.
+
+    Convenience wrapper for single-intent callers.
+    """
     intents = _extract_intents(command)
     return intents[0] if intents else None
 
 
+# ── Path normalisation ──────────────────────────────────────────────────────
+
+def _norm_path(raw: str, *, base_dir: str | Path | None = None) -> str:
+    """Normalize a target path for intent-key comparison.
+
+    Strip trailing whitespace and resolve user-relative (``~/...``) and
+    workspace-relative prefixes once, so ``/tmp/a`` vs ``/tmp/a/`` vs
+    ``/tmp/a/./`` collapse to the same key.
+    """
+    raw = raw.strip()
+    if not raw:
+        return raw
+    if raw.startswith("~"):
+        raw = str(Path(raw).expanduser())
+    return str(PurePath(raw))
+
+
+# ── Intent approval cache ───────────────────────────────────────────────────
+
 class IntentApprovalCache:
-    """In-memory cache keyed by ``(kind, target)`` with scope-aware expiry.
+    """Per-session map of pending and approved high-stakes intents.
 
-    Two scopes exist so the approval prompt's ``once`` and ``always`` mean
-    what they say:
+    An intent is a pair ``(kind, target)`` normalised through ``_norm_path``.
+    ``kind`` is always ``"delete"`` for now; ``target`` is a resolved path.
 
-    * ``once``  — covers only paraphrased retries within the same user turn
-                  (rm → os.remove within one model response). Cleared at the
-                  start of every new user message via :meth:`clear_scope`.
-    * ``always`` — persists for the full session TTL; re-prompts won't appear
-                  for the same intent until the process restarts.
+    Caller flow
+    -----------
+    1.  Extract intents from the tool call with ``_extract_intents``.
+    2.  Call ``check`` to see which are cached (approved in the last window).
+    3.  Present any uncached intents to the human.
+    4.  Call ``approve`` on the approved set.
+
+    Thread-safety
+    -------------
+    Not thread-safe — call from a single event-loop task.
     """
 
-    def __init__(self, default_ttl: float = _DEFAULT_TTL_SECONDS) -> None:
-        self._default_ttl = default_ttl
-        # intent -> (expires_monotonic, scope)
-        self._entries: dict[tuple[str, str], tuple[float, str]] = {}
-        self._lock = threading.Lock()
+    def __init__(self, approval_window: float = 30.0) -> None:
+        self._approval_window = approval_window
+        self._cache: dict[tuple[str, str], float] = {}
+        self._pending: list[list[tuple[str, str]]] = []
 
-    def record(
-        self, command: str, ttl: float | None = None, *, scope: str = "once"
-    ) -> list[tuple[str, str]]:
-        """Mark every intent extracted from *command* as approved.
+    # ── Cache API ───────────────────────────────────────────────────────────
 
-        Handles multi-target commands like ``rm a b c`` — each path becomes its
-        own cache entry. Returns the list of recorded intents (empty if none
-        could be extracted).
-        """
-        intents = _extract_intents(command)
-        if not intents:
+    def check(self, intents: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Return the subset of *intents* still in the approval window."""
+        now = time()
+        stale_keys = [k for k, t in self._cache.items() if now - t > self._approval_window]
+        for k in stale_keys:
+            del self._cache[k]
+        return [i for i in intents if i in self._cache]
+
+    def approve(self, intents: list[tuple[str, str]]) -> None:
+        """Record approval timestamp for each intent in *intents*."""
+        now = time()
+        for intent in intents:
+            self._cache[intent] = now
+
+    # ── Pending-approval API ────────────────────────────────────────────────
+
+    def push_pending(self, intents: list[tuple[str, str]]) -> None:
+        self._pending.append(intents)
+
+    def pop_pending(self) -> list[tuple[str, str]]:
+        if not self._pending:
             return []
-        expires = time.monotonic() + (ttl if ttl is not None else self._default_ttl)
-        with self._lock:
-            for intent in intents:
-                self._entries[intent] = (expires, scope)
-        return intents
+        return self._pending.pop(0)
 
-    def record_always(self, command: str) -> list[tuple[str, str]]:
-        """Remember every intent in *command* for the session lifetime."""
-        return self.record(command, ttl=_ALWAYS_TTL_SECONDS, scope="always")
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
 
-    def check(self, command: str) -> bool:
-        """Return True only when **every** extracted intent is still approved.
+    # ── Python delete patterns ──────────────────────────────────────────────
 
-        Multi-target commands must have approval for *all* targets — one
-        missing path means the whole command needs fresh approval.
-        """
-        intents = _extract_intents(command)
-        if not intents:
-            return False
-        now = time.monotonic()
-        with self._lock:
-            for intent in intents:
-                entry = self._entries.get(intent)
-                if entry is None:
-                    return False
-                expires, _scope = entry
-                if expires < now:
-                    self._entries.pop(intent, None)
-                    return False
-        return True
-
-    def forget(self, command: str) -> None:
-        intents = _extract_intents(command)
-        if not intents:
-            return
-        with self._lock:
-            for intent in intents:
-                self._entries.pop(intent, None)
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries.clear()
-
-    def clear_scope(self, scope: str) -> None:
-        """Drop every entry whose scope matches, leaving other scopes intact."""
-        with self._lock:
-            self._entries = {
-                intent: data
-                for intent, data in self._entries.items()
-                if data[1] != scope
-            }
-
-
+_PY_DELETE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # os.remove, os.unlink
+    re.compile(r"(?:^|[\s;(])"
+               r"(?:os\.)?(?:remove|unlink|rmdir|removedirs)"
+               r"\s*\(\s*(?:rf\"|rf'|f\"|f'|\"|')(.*?)(?:\"|')\s*\)"),
+    # shutil.rmtree
+    re.compile(r"(?:^|[\s;(])"
+               r"shutil\.rmtree\s*\(\s*(?:rf\"|rf'|f\"|f'|\"|')(.*?)(?:\"|')\s*\)"),
+    # pathlib Path(...).unlink / .rmdir
+    re.compile(r"(?:^|[\s;(])"
+               r"path(?:lib)?\..*?\.(?:unlink|rmdir)\s*\(\s*\)"),
+)
 _cache: IntentApprovalCache | None = None
 
 

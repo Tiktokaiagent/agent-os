@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 
-from agentos.cli.output import emit_error, print_json
+import typer
+
+from agentos.cli.output import _safe_echo, emit_error, print_json
 
 
 def test_print_json_uses_stdout(capsys):
@@ -27,3 +29,23 @@ def test_emit_error_json_uses_stderr(capsys):
             "details": {"field": "x"},
         }
     }
+
+
+def test_safe_echo_falls_back_when_typer_echo_raises_unicode_error(monkeypatch):
+    """When typer.echo raises UnicodeEncodeError, _safe_echo does not crash."""
+
+    def fake_echo(text, err=False):
+        raise UnicodeEncodeError("utf-8", "", 0, 1, "test encoding error")
+
+    monkeypatch.setattr(typer, "echo", fake_echo)
+
+    _safe_echo("✅ done")
+
+    assert True  # no exception
+
+
+def test_safe_echo_normal_case(capsys):
+    _safe_echo("héllo world")
+
+    captured = capsys.readouterr()
+    assert captured.out == "héllo world\n"

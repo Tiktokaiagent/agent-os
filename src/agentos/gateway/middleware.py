@@ -250,9 +250,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
 
         elif auth_mode == "trusted-proxy":
-            proxy = self._config.auth.trusted_proxy
-            forwarded_for = request.headers.get("x-forwarded-for", "")
-            if proxy and proxy not in forwarded_for:
+            # The real transport peer must be in the trusted set. Checking the
+            # X-Forwarded-For header alone is trivially spoofable — any client
+            # can send the proxy's IP and pass the gate. Once the peer check
+            # passes, the header (set by the real proxy) is trusted for
+            # downstream IP extraction (e.g. RateLimitMiddleware._get_client_ip).
+            peer_ip = request.client.host if request.client else None
+            if not peer_ip or not self._is_trusted_proxy(peer_ip):
                 return JSONResponse(
                     {"error": "Unauthorized", "code": "UNAUTHORIZED"}, status_code=401
                 )

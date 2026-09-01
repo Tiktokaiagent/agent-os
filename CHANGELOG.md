@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Security
+- ``auth.mode="trusted-proxy"`` no longer admits connections based on a
+  spoofable substring check of the ``X-Forwarded-For`` header. Admission now
+  requires the real transport peer IP (``request.client.host``) to be in the
+  ``trusted_proxy`` set, matching the logic that ``RateLimitMiddleware`` already
+  used. The ``X-Forwarded-For`` header is still consumed for downstream IP
+  extraction once the peer check passes, so Nginx / Caddy / ALB deployments
+  keep working (#568).
+
 
 - Proxy names are no longer writable through any AgentOS surface. `set_env_var`
   (and the Web UI, `agentos env set`, and the gateway RPC) could previously

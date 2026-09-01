@@ -10,6 +10,14 @@ from typing import Any, Protocol
 
 from agentos.gateway_client import normalize_gateway_url
 
+#: Upper clamp for :meth:`events_wait` ``max_events``.
+_MAX_EVENTS = 10_000
+#: Upper clamp for :meth:`events_wait` ``timeout_ms``.
+_MAX_TIMEOUT_MS = 300_000
+#: Upper clamp for :meth:`conversations_list` / :meth:`transcript_jsonl`
+#: / :meth:`messages_read` ``limit``.
+_MAX_LIST_LIMIT = 5_000
+
 
 class GatewayClientLike(Protocol):
     async def connect(self, url: str) -> None: ...
@@ -65,7 +73,7 @@ class AgentOSMCPBridge:
 
     async def conversations_list(self, limit: int = 50) -> dict[str, Any]:
         client = await self._ensure_client()
-        return await client.list_sessions(limit=limit)
+        return await client.list_sessions(limit=min(max(1, limit), _MAX_LIST_LIMIT))
 
     async def session_resolve(self, key: str) -> dict[str, Any]:
         client = await self._ensure_client()
@@ -73,7 +81,7 @@ class AgentOSMCPBridge:
 
     async def messages_read(self, key: str, limit: int = 1000) -> dict[str, Any]:
         client = await self._ensure_client()
-        return await client.session_history(key, limit=limit)
+        return await client.session_history(key, limit=min(max(1, limit), _MAX_LIST_LIMIT))
 
     async def messages_send(
         self,
@@ -131,8 +139,8 @@ class AgentOSMCPBridge:
             current_stream_seq = int(
                 subscription.get("current_stream_seq") or since_stream_seq or 0
             )
-            deadline = time.monotonic() + max(0, timeout_ms) / 1000
-            max_events = max(1, max_events)
+            deadline = time.monotonic() + min(max(0, timeout_ms), _MAX_TIMEOUT_MS) / 1000
+            max_events = max(1, min(max_events, _MAX_EVENTS))
 
             while len(events) < max_events:
                 remaining = deadline - time.monotonic()

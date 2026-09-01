@@ -277,8 +277,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return request.headers.get("x-agentos-token")
 
 
+#: Default max requests per window for the dedicated approval bucket.
+#: Higher than the shared API bucket so the UI poll (~40 req/min/tab) fits
+#: comfortably without removing the rate-limit entirely.
+_APPROVAL_BUCKET_MAX_REQUESTS: int = 300
+#: Default window for the approval bucket (same unit as rate_limit.window_seconds).
+_APPROVAL_BUCKET_WINDOW_SECONDS: float = 60.0
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple sliding-window rate limiter per client IP."""
+    """Simple sliding-window rate limiter per client IP.
+
+    ``GET /api/approvals`` gets its own bucket (``_approval_windows``) so the
+    UI poll does not collide with normal REST traffic, while still preventing
+    an attacker from saturating the approval endpoint.
+    """
 
     def __init__(
         self,
@@ -295,6 +308,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self._ui_prefix = _safe_ui_exempt_prefix(base_path)
         # {ip: [timestamp, ...]} with LRU eviction ordering
         self._windows: OrderedDict[str, list[float]] = OrderedDict()
+        # Separate bucket for GET /api/approvals — UI poll never starves
+        # legitimate API requests and vice versa.
+        self._approval_windows: OrderedDict[str, list[float]] = OrderedDict()
         self._max_tracked_clients = max_tracked_clients
         self._last_sweep: float = 0.0
 
@@ -340,6 +356,43 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         while len(self._windows) > self._max_tracked_clients:
             self._windows.popitem(last=False)
 
+    async def _check_approval_bucket(
+        self,
+        request: Request,
+        call_next: Callable,
+    ) -> Response:
+        """Rate-limit ``GET /api/approvals`` in a dedicated bucket."""
+        client_ip = self._get_client_ip(request)
+        now = time.time()
+        window = float(
+            self._config.rate_limit.window_seconds
+            if hasattr(self._config.rate_limit, "window_seconds")
+            and self._config.rate_limit.window_seconds
+            else _APPROVAL_BUCKET_WINDOW_SECONDS
+        )
+        max_req = _APPROVAL_BUCKET_MAX_REQUESTS
+
+        timestamps = [
+            t for t in self._approval_windows.get(client_ip, []) if now - t < window
+        ]
+
+        if len(timestamps) >= max_req:
+            self._approval_windows[client_ip] = timestamps
+            self._approval_windows.move_to_end(client_ip)
+            return JSONResponse(
+                {"error": "Too Many Requests", "code": "RATE_LIMITED"}, status_code=429
+            )
+
+        timestamps.append(now)
+        self._approval_windows[client_ip] = timestamps
+        self._approval_windows.move_to_end(client_ip)
+
+        # Keep approval window cache under the same ceiling
+        while len(self._approval_windows) > self._max_tracked_clients:
+            self._approval_windows.popitem(last=False)
+
+        return await call_next(request)  # type: ignore[no-any-return]
+
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if not self._config.rate_limit.enabled:
             return await call_next(request)  # type: ignore[no-any-return]
@@ -350,10 +403,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # blows past the API bucket and the operator sees a hard 429 on the
         # bare HTML. Mutating endpoints under /api/* are still limited.
         path = request.url.path
+        is_approval_get = request.method == "GET" and path == "/api/approvals"
         if self._is_ui_path(path):
             return await call_next(request)  # type: ignore[no-any-return]
-        if request.method == "GET" and path == "/api/approvals":
-            return await call_next(request)  # type: ignore[no-any-return]
+
+        if is_approval_get:
+            # Dedicated approval bucket — the UI polls every 1.5 s per tab;
+            # sharing the API bucket would hit 429 on 2-3 tabs.
+            return await self._check_approval_bucket(request, call_next)
 
         client_ip = self._get_client_ip(request)
         now = time.time()

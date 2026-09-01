@@ -61,12 +61,12 @@ class Version:
             # but a given raw string stays equal to itself.
             return ((-1,) * width, (-1,), self.raw)
         if self.dev is not None and self.pre is None and self.post is None:
-            phase: tuple[int, ...] = (0, self.dev)
+            phase: tuple[int | float, ...] = (0, self.dev)
         elif self.pre is not None:
             dev_tie: int | float = self.dev if self.dev is not None else float("inf")
             phase = (1, self.pre[0], self.pre[1], dev_tie)
         elif self.post is not None:
-            dev_tie: int | float = self.dev if self.dev is not None else float("inf")
+            dev_tie = self.dev if self.dev is not None else float("inf")
             phase = (3, self.post, dev_tie)
         else:
             phase = (2,)

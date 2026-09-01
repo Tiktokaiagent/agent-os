@@ -93,6 +93,55 @@ def test_parse_cron_rejects_reversed_range_with_step() -> None:
         parse_cron("5-3/2 * * * *")
     with pytest.raises(CronParseError, match="Range start > end"):
         parse_cron("0 0 * * FRI-TUE/2")
+
+
+# ---------------------------------------------------------------------------
+# CronExpression.matches — day-of-month / day-of-week OR semantics (#660)
+# ---------------------------------------------------------------------------
+
+
+def test_matches_ors_dom_and_dow_when_both_restricted() -> None:
+    """POSIX: when both day-of-month and day-of-week are restricted,
+    the job fires when EITHER matches."""
+    expr = parse_cron("0 0 1,15 * 5")
+
+    # Friday (day=7, not 1 or 15) → should match via day-of-week
+    friday = datetime(2026, 8, 7, 0, 0, tzinfo=UTC)
+    assert expr.matches(friday), "Friday should match via day-of-week"
+
+    # 1st (Saturday) → should match via day-of-month
+    first = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    assert expr.matches(first), "1st should match via day-of-month"
+
+    # 15th (Saturday) → should match via day-of-month
+    fifteenth = datetime(2026, 8, 15, 0, 0, tzinfo=UTC)
+    assert expr.matches(fifteenth), "15th should match via day-of-month"
+
+    # Monday 3rd (not 1st/15th, not Friday) → should NOT match
+    monday_3rd = datetime(2026, 8, 3, 0, 0, tzinfo=UTC)
+    assert not expr.matches(monday_3rd), "Monday 3rd should NOT match"
+
+
+def test_matches_ands_dom_and_dow_when_one_is_wild() -> None:
+    """When either day-of-month or day-of-week is a wildcard, AND semantics
+    apply as normal."""
+    # DOM restricted, DOW wildcard → only 1st and 15th
+    dom_only = parse_cron("0 0 1,15 * *")
+    friday_7th = datetime(2026, 8, 7, 0, 0, tzinfo=UTC)
+    assert not dom_only.matches(friday_7th), "DOM-only should not match Friday 7th"
+    assert dom_only.matches(datetime(2026, 8, 1, 0, 0, tzinfo=UTC)), "1st should match"
+
+    # DOW restricted, DOM wildcard → only Fridays
+    dow_only = parse_cron("0 0 * * 5")
+    sat_1st = datetime(2026, 8, 1, 0, 0, tzinfo=UTC)
+    assert not dow_only.matches(sat_1st), "DOW-only should not match Saturday 1st"
+    assert dow_only.matches(friday_7th), "DOW-only should match Friday"
+
+
+def test_matches_ands_dom_and_dow_when_both_wild() -> None:
+    """Both wildcards → every day."""
+    every = parse_cron("0 0 * * *")
+    assert every.matches(datetime(2026, 8, 3, 0, 0, tzinfo=UTC))
     with pytest.raises(CronParseError, match="Range start > end"):
         parse_cron("0 0 * dec-feb/2 *")
 

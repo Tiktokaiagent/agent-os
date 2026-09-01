@@ -732,7 +732,7 @@ See [`channels.md`](channels.md) for details.
 
 Use **Settings > MCP Servers** in the Web UI for normal MCP setup. It supports
 live connect/disconnect controls, inline validation, OAuth authorization, and a
-featured Robinhood Trading preset.
+featured Robinhood Trading and Base MCP presets.
 
 For scripted deployments, configure servers in TOML:
 
@@ -745,6 +745,13 @@ connect_timeout_seconds = 10
 name = "robinhood-trading"
 transport = "streamable_http"
 url = "https://agent.robinhood.com/mcp/trading"
+oauth = true
+tool_timeout_seconds = 30
+
+[[mcp.servers]]
+name = "base-mcp"
+transport = "streamable_http"
+url = "https://mcp.base.org"
 oauth = true
 tool_timeout_seconds = 30
 ```

@@ -17,12 +17,21 @@ channels, scheduling, and reusable skills.
 
 ### Agentic Trading
 
-Trading is a first-class capability. A featured Robinhood Trading MCP preset and
+Trading is a first-class capability. Featured Robinhood and Base MCP presets and
 bundled skills cover market research, portfolio analysis, order execution, and
 liquidity management, behind explicit confirmation and the standard approval
 layers.
 
 Read: [`features/agentic-trading.md`](features/agentic-trading.md)
+
+### Base Onchain Wallet
+
+A self-custodial Base Account wallet reaches your agent through the **Base MCP**
+preset. The Web UI shows a dedicated partner card with OAuth setup, and the
+same architecture — Streamable HTTP, live tool discovery — as the Robinhood
+integration.
+
+Read: [`features/base-mcp.md`](features/base-mcp.md)
 
 ### Pilot Router
 

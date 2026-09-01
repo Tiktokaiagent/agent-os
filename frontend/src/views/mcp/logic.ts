@@ -4,6 +4,8 @@ import '@/i18n/en/mcp'
 export const ROBINHOOD_MCP_URL = 'https://agent.robinhood.com/mcp/trading'
 export const ROBINHOOD_HELP_URL =
   'https://robinhood.com/us/en/support/articles/agentic-trading-overview/#ConnectyourAIagent'
+export const BASE_MCP_URL = 'https://mcp.base.org'
+export const BASE_HELP_URL = 'https://docs.base.org/agents'
 
 export type McpTransport = 'streamable_http' | 'sse' | 'stdio'
 
@@ -77,13 +79,15 @@ export interface McpServerPresentation {
   toolCount: number
 }
 
-export interface RobinhoodPresentation {
+export interface PartnerPresentation {
   tone: 'connected' | 'authorization' | 'paused' | 'ready' | 'unavailable'
   label: string
   detail: string
   tools: string
   action: string
 }
+
+export type PartnerKey = 'rh' | 'base'
 
 export function normalizeWorkspace(
   config: McpConfigResponse | null | undefined,
@@ -233,65 +237,73 @@ export function serverPresentation(
   }
 }
 
+const PARTNER_URLS: Record<PartnerKey, string> = {
+  rh: ROBINHOOD_MCP_URL,
+  base: BASE_MCP_URL,
+}
+
+const PARTNER_I18N_KEYS: Record<PartnerKey, string> = {
+  rh: 'rh',
+  base: 'base',
+}
+
+/**
+ * Generalized partner presentation replacing the Robinhood-only version.
+ * Takes a *key* (``'rh'`` or ``'base'``) and looks up the matching i18n
+ * prefix (``mcp.rh*`` or ``mcp.base*``) and server URL.
+ */
+export function partnerPresentation(
+  key: PartnerKey,
+  servers: McpServerConfig[],
+  statusByName: Record<string, McpServerStatus>,
+  enabled: boolean,
+  statusAvailable = true,
+): PartnerPresentation {
+  const partnerUrl = PARTNER_URLS[key]
+  const k = PARTNER_I18N_KEYS[key]
+  const server = servers.find((entry) => entry.url === partnerUrl)
+  const readyLabel = t(`mcp.${k}Ready`)
+  const readyDetail = t(`mcp.${k}ReadyDetail`)
+  const readyTools = t(`mcp.${k}ReadyTools`)
+  const readyAction = t(`mcp.${k}ReadyAction`)
+  const reviewAction = t(`mcp.${k}ReviewAction`)
+
+  if (!server) {
+    return { tone: 'ready', label: readyLabel, detail: readyDetail, tools: readyTools, action: readyAction }
+  }
+  const status = statusByName[server.name]
+  const toolCount = status?.tools?.length ?? 0
+  if (!enabled) {
+    return { tone: 'paused', label: t(`mcp.${k}Paused`), detail: t(`mcp.${k}PausedDetail`), tools: t(`mcp.${k}PausedTools`), action: reviewAction }
+  }
+  if (!statusAvailable) {
+    return { tone: 'unavailable', label: t(`mcp.${k}Unavailable`), detail: t(`mcp.${k}UnavailableDetail`), tools: t(`mcp.${k}UnavailableTools`), action: reviewAction }
+  }
+  if (status?.connected) {
+    return { tone: 'connected', label: t(`mcp.${k}Connected`), detail: tPlural(`mcp.${k}ConnectedDetail`, toolCount), tools: t(`mcp.${k}ConnectedTools`, { count: toolCount }), action: t(`mcp.${k}ManageAction`) }
+  }
+  if (server.oauth && !status?.authenticated) {
+    return { tone: 'authorization', label: t(`mcp.${k}OauthRequired`), detail: t(`mcp.${k}OauthDetail`), tools: t(`mcp.${k}OauthTools`), action: t(`mcp.${k}AuthorizeAction`) }
+  }
+  return { tone: 'ready', label: readyLabel, detail: t(`mcp.${k}SavedDetail`), tools: readyTools, action: reviewAction }
+}
+
+/** Convenience wrapper: robinhoodPresentation calls partnerPresentation with key 'rh'. */
 export function robinhoodPresentation(
   servers: McpServerConfig[],
   statusByName: Record<string, McpServerStatus>,
   enabled: boolean,
   statusAvailable = true,
-): RobinhoodPresentation {
-  const server = servers.find((entry) => entry.url === ROBINHOOD_MCP_URL)
-  if (!server) {
-    return {
-      tone: 'ready',
-      label: t('mcp.rhReady'),
-      detail: t('mcp.rhReadyDetail'),
-      tools: t('mcp.rhReadyTools'),
-      action: t('mcp.rhReadyAction'),
-    }
-  }
-  const status = statusByName[server.name]
-  const toolCount = status?.tools?.length ?? 0
-  if (!enabled) {
-    return {
-      tone: 'paused',
-      label: t('mcp.rhPaused'),
-      detail: t('mcp.rhPausedDetail'),
-      tools: t('mcp.rhPausedTools'),
-      action: t('mcp.rhReviewAction'),
-    }
-  }
-  if (!statusAvailable) {
-    return {
-      tone: 'unavailable',
-      label: t('mcp.rhUnavailable'),
-      detail: t('mcp.rhUnavailableDetail'),
-      tools: t('mcp.rhUnavailableTools'),
-      action: t('mcp.rhReviewAction'),
-    }
-  }
-  if (status?.connected) {
-    return {
-      tone: 'connected',
-      label: t('mcp.rhConnected'),
-      detail: tPlural('mcp.rhConnectedDetail', toolCount),
-      tools: t('mcp.rhConnectedTools', { count: toolCount }),
-      action: t('mcp.rhManageAction'),
-    }
-  }
-  if (server.oauth && !status?.authenticated) {
-    return {
-      tone: 'authorization',
-      label: t('mcp.rhOauthRequired'),
-      detail: t('mcp.rhOauthDetail'),
-      tools: t('mcp.rhOauthTools'),
-      action: t('mcp.rhAuthorizeAction'),
-    }
-  }
-  return {
-    tone: 'ready',
-    label: t('mcp.rhReady'),
-    detail: t('mcp.rhSavedDetail'),
-    tools: t('mcp.rhReadyTools'),
-    action: t('mcp.rhReviewAction'),
-  }
+): PartnerPresentation {
+  return partnerPresentation('rh', servers, statusByName, enabled, statusAvailable)
+}
+
+/** Convenience wrapper for the Base MCP partner card. */
+export function basePresentation(
+  servers: McpServerConfig[],
+  statusByName: Record<string, McpServerStatus>,
+  enabled: boolean,
+  statusAvailable = true,
+): PartnerPresentation {
+  return partnerPresentation('base', servers, statusByName, enabled, statusAvailable)
 }

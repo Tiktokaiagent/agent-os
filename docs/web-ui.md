@@ -307,16 +307,29 @@ from `config.toml` in the AgentOS state directory. AgentOS applies mode `0600`
 inside a `0700` directory on POSIX systems; Windows uses the current user's
 state-directory ACL.
 
-The featured Robinhood Trading connection uses:
+Two featured partner connections ship with AgentOS:
+
+**Robinhood Trading**
 
 ```text
 https://agent.robinhood.com/mcp/trading
 ```
 
-It is configured as Streamable HTTP with OAuth. Saving the connection opens the
-provider authorization flow and loads its tools without requiring a gateway
-restart. Agentic trading involves significant risk. Review the server's access
-and action permissions before authorizing it.
+Streamable HTTP with OAuth. Saving the connection opens the provider
+authorization flow and loads its tools without requiring a gateway restart.
+Agentic trading involves significant risk. Review the server's access and
+action permissions before authorizing it.
+
+**Base MCP**
+
+```text
+https://mcp.base.org
+```
+
+Streamable HTTP with OAuth. Gives the agent a self-custodial Base Account
+wallet — balances, send tokens, swap, transaction history, signing, and batch
+contract calls. Every write action requires explicit approval inside the Base
+Account.
 
 ## Skills
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BASE_MCP_URL,
   ROBINHOOD_MCP_URL,
+  basePresentation,
   createServerDraft,
   normalizeWorkspace,
   robinhoodPresentation,
@@ -88,6 +90,34 @@ describe('MCP view logic', () => {
         true,
       ),
     ).toMatchObject({ tone: 'connected', detail: '1 live tool', tools: '1 registered' })
+  })
+
+
+  it('derives Base MCP presentation from the generalized partner function', () => {
+    const base = { ...HTTP_SERVER, name: 'base-mcp', url: BASE_MCP_URL }
+    // Not connected yet: ready state
+    expect(basePresentation([base], {}, true)).toMatchObject({
+      tone: 'ready',
+      label: 'Ready to connect',
+    })
+    // Connected with tools
+    expect(
+      basePresentation(
+        [base],
+        { 'base-mcp': { name: 'base-mcp', connected: true, tools: ['transfer', 'swap'] } },
+        true,
+      ),
+    ).toMatchObject({ tone: 'connected', detail: '2 live tools', tools: '2 registered' })
+    // Runtime paused
+    expect(basePresentation([base], {}, false)).toMatchObject({
+      tone: 'paused',
+      label: 'Runtime paused',
+    })
+    // Status unavailable
+    expect(basePresentation([base], {}, true, false)).toMatchObject({
+      tone: 'unavailable',
+      action: 'Review connection',
+    })
   })
 
   it('does not claim a connection state when live MCP status is unavailable', () => {

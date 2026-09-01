@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from agentos.tools.builtin.media import _fetch_image_url
+from agentos.tools.types import ToolError
 
 
 def _png_header() -> bytes:

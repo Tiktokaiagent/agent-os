@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import time
 
 import pytest
 
@@ -21,7 +24,8 @@ class _BodyRequest:
 
 @pytest.mark.asyncio
 async def test_slack_webhook_dedupes_retried_event_callback() -> None:
-    channel = SlackChannel(token="xoxb-test", slack_channel_id="C1")
+    channel = SlackChannel(token="xoxb-test", slack_channel_id="C1", signing_secret="test-secret")
+
     payload = {
         "type": "event_callback",
         "event_id": "Ev123",
@@ -35,8 +39,21 @@ async def test_slack_webhook_dedupes_retried_event_callback() -> None:
         },
     }
 
-    await channel._handle_webhook(_BodyRequest(payload))  # noqa: SLF001
-    await channel._handle_webhook(_BodyRequest(payload))  # noqa: SLF001
+    # Sign requests so signature verification passes
+    timestamp = str(int(time.time()))
+    sig_basestring = f"v0:{timestamp}:{json.dumps(payload)}"
+    signature = "v0=" + hmac.HMAC(
+        b"test-secret", sig_basestring.encode(), hashlib.sha256
+    ).hexdigest()
+
+    async def _signed_request() -> _BodyRequest:
+        req = _BodyRequest(payload)
+        req.headers["X-Slack-Request-Timestamp"] = timestamp
+        req.headers["X-Slack-Signature"] = signature
+        return req
+
+    await channel._handle_webhook(await _signed_request())  # noqa: SLF001
+    await channel._handle_webhook(await _signed_request())  # noqa: SLF001
 
     assert channel._queue.qsize() == 1  # noqa: SLF001
     assert (await channel.receive()).content == "draw an image"

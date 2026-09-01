@@ -51,9 +51,12 @@ _OPENAI_COMPAT_PROVIDERS = {
     "minimax_openai",
     "volcengine",
     "byteplus",
+    "volcengine_coding_plan",
     "vllm",
     "lm_studio",
     "ovms",
+    "bankr",
+    "byteplus_coding_plan",
 }
 
 _GATEWAY_TRANSIENT_STATUS_CODES = {499, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529}

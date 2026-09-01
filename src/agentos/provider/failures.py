@@ -148,7 +148,13 @@ def classify_provider_error(
     if provider in _OPENAI_COMPAT_PROVIDERS:
         if status_code in {401, 403} or "invalid api key" in text or "unauthorized" in text:
             return ProviderFailureKind.AUTH_INVALID
-        if status_code == 402 or "insufficient credits" in text or "no credits" in text:
+        if (
+            status_code == 402
+            or "insufficient_quota" in text
+            or "insufficient credits" in text
+            or "no credits" in text
+            or "credit balance" in text
+        ):
             return ProviderFailureKind.INSUFFICIENT_CREDITS
         if status_code == 429 or "rate limit" in text or "rate_limit" in text:
             return ProviderFailureKind.RATE_LIMITED
@@ -168,6 +174,13 @@ def classify_provider_error(
     if provider in {"anthropic", "minimax", "minimax_cn", "minimax_global"}:
         if status_code in {401, 403} or "authentication_error" in text:
             return ProviderFailureKind.AUTH_INVALID
+        if (
+            status_code == 402
+            or "billing_error" in text
+            or "credit balance" in text
+            or "insufficient_quota" in text
+        ):
+            return ProviderFailureKind.INSUFFICIENT_CREDITS
         if status_code == 429 or "rate_limit_error" in text:
             return ProviderFailureKind.RATE_LIMITED
         if status_code in _GATEWAY_TRANSIENT_STATUS_CODES or "overloaded_error" in text:

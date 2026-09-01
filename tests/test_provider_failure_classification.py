@@ -337,3 +337,55 @@ def test_ollama_transport_messages_classify_as_transport_transient(message: str)
         classify_provider_error("ollama", None, message=message)
         is ProviderFailureKind.TRANSPORT_TRANSIENT
     )
+
+
+@pytest.mark.parametrize(
+    ("provider", "status_code", "raw_code", "message"),
+    [
+        ("openai", 429, "insufficient_quota", "You exceeded your current quota"),
+        ("openrouter", 429, "insufficient_quota", "Insufficient quota"),
+        ("deepseek", 429, "insufficient_quota", "quota exceeded"),
+        ("openai", None, "insufficient_quota", ""),
+        ("openai", 402, "billing_error", "Insufficient credits"),
+        ("openai", None, "", "credit balance is too low"),
+    ],
+)
+def test_openai_compat_insufficient_quota_classifies_as_insufficient_credits(
+    provider: str, status_code: int | None, raw_code: str, message: str
+) -> None:
+    assert (
+        classify_provider_error(provider, status_code, raw_code=raw_code, message=message)
+        is ProviderFailureKind.INSUFFICIENT_CREDITS
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "status_code", "raw_code", "message"),
+    [
+        ("anthropic", 402, "billing_error", "Your credit balance is too low"),
+        ("minimax", 402, "billing_error", "credit balance exhausted"),
+        ("anthropic", None, "", "credit balance is too low"),
+        ("anthropic", None, "insufficient_quota", ""),
+    ],
+)
+def test_anthropic_billing_error_classifies_as_insufficient_credits(
+    provider: str, status_code: int | None, raw_code: str, message: str
+) -> None:
+    assert (
+        classify_provider_error(provider, status_code, raw_code=raw_code, message=message)
+        is ProviderFailureKind.INSUFFICIENT_CREDITS
+    )
+
+
+def test_openai_real_rate_limit_still_classifies_as_rate_limited() -> None:
+    assert (
+        classify_provider_error("openai", 429, message="rate limit exceeded")
+        is ProviderFailureKind.RATE_LIMITED
+    )
+
+
+def test_anthropic_real_rate_limit_still_classifies_as_rate_limited() -> None:
+    assert (
+        classify_provider_error("anthropic", 429, message="rate limit exceeded")
+        is ProviderFailureKind.RATE_LIMITED
+    )

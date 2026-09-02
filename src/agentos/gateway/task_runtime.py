@@ -1270,6 +1270,12 @@ class TaskRuntime:
             return
         if not pending:
             self._pending_by_session.pop(task.envelope.session_key, None)
+        _total_queue_depth = sum(len(v) for v in self._pending_by_session.values())
+        _emit_metric(
+            "agentos_queue_depth",
+            value=_total_queue_depth,
+            session_key=task.envelope.session_key,
+        )
 
     async def _emit(self, session_key: str, event_name: str, payload: dict[str, Any]) -> None:
         if self._event_emitter is None:

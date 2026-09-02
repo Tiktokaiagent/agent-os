@@ -24,9 +24,22 @@ from agentos.tools.registry import tool
 from agentos.tools.types import ToolError, current_tool_context
 
 # Destructive Python patterns that must go through the same approval flow as
-# shell warnlist hits. Catches the "agent pivots from `rm` to `os.remove()`"
-# bypass. Matching is intentionally shallow (regex, not AST) — goal is to
-# force approval on obvious intent, not to prove safety.
+# shell warnlist hits. Matches via AST (not regex) so obfuscation techniques
+# like getattr() with concatenated names, __import__(), importlib imports,
+# and exec/eval with destructive literals are caught.
+_DESTRUCTIVE_MODULE_ATTRS: dict[str, frozenset[str]] = {
+    "os": frozenset(["remove", "unlink", "rmdir", "removedirs", "system"]),
+    "shutil": frozenset(["rmtree", "rmdir", "remove"]),
+    "pathlib": frozenset(["unlink", "rmdir"]),
+}
+_DESTRUCTIVE_FUNCTIONS: frozenset[str] = frozenset([
+    "remove", "unlink", "rmdir", "removedirs", "rmtree",
+])
+_DESTRUCTIVE_STRING_MARKERS: frozenset[str] = frozenset([
+    "remove", "unlink", "rmdir", "rmtree", "removedirs",
+])
+
+
 _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
     (r"\bos\.remove\s*\(", "os.remove()"),
     (r"\bos\.unlink\s*\(", "os.unlink()"),
@@ -47,11 +60,181 @@ _DESTRUCTIVE_PY_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+# Destructive module names that should be flagged when imported directly
+_DESTRUCTIVE_IMPORT_MODULES: frozenset[str] = frozenset([
+    "os", "shutil",
+])
+
+# Functions that can invoke arbitrary code with string arguments
+_EVAL_LIKE_FUNCTIONS: frozenset[str] = frozenset([
+    "exec", "eval", "compile",
+])
+
+# Functions used for dynamic attribute access
+_ATTR_ACCESS_FUNCTIONS: frozenset[str] = frozenset([
+    "getattr", "setattr", "delattr",
+])
+
+
 def _check_code_destructive(code: str) -> str | None:
-    """Return a human-readable warning if *code* triggers a destructive pattern, else None."""
+    """Return a human-readable warning if *code* triggers a destructive pattern, else None.
+
+    Uses AST analysis (supplemented by regex for non-parseable code) to detect:
+    - Direct attribute access: os.remove(), shutil.rmtree(), Path.unlink()
+    - getattr() with stacked args: getattr(os, "remove")()
+    - __import__().something(): __import__("os").remove()
+    - exec/eval with destructive keywords
+    - importlib.import_module().something()
+    - Combined/multiple destructive calls
+    """
+    # First: regex-based scan for obvious patterns (fast path)
     for pattern, label in _DESTRUCTIVE_PY_PATTERNS:
         if re.search(pattern, code):
             return f"destructive Python operation detected: {label}"
+
+    # Second: AST analysis for obfuscated bypasses
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    imported_names: dict[str, str] = {}
+    # Track aliases: from os import remove as rm -> rm -> os
+    alias_map: dict[str, tuple[str, str]] = {}
+    module_imports: set[str] = set()
+
+    for node in ast.walk(tree):
+        # Track imports to resolve attribute chains
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported_names[alias.asname or alias.name] = alias.name
+                if alias.name in _DESTRUCTIVE_MODULE_ATTRS:
+                    module_imports.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module in _DESTRUCTIVE_IMPORT_MODULES:
+                module_imports.add(node.module)
+                for alias in node.names:
+                    if alias.name in _DESTRUCTIVE_MODULE_ATTRS.get(node.module, frozenset()):
+                        return f"destructive Python operation detected: {node.module}.{alias.name}()"
+                    # Wildcard imports from destructive modules
+                    if alias.name == "*":
+                        return f"destructive Python operation detected: from {node.module} import * (allows all {node.module} functions)"
+                    alias_map[alias.asname or alias.name] = (node.module, alias.name)
+            elif node.module in ["importlib", "builtins"]:
+                for alias in node.names:
+                    alias_map[alias.asname or alias.name] = (node.module, alias.name)
+
+        # Check attribute access chains: os.remove, shutil.rmtree, etc.
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load):
+            module = node.value.id
+            resolved = imported_names.get(module, module)
+            attr = node.attr
+            if resolved in _DESTRUCTIVE_MODULE_ATTRS and attr in (_DESTRUCTIVE_MODULE_ATTRS[resolved]):
+                return f"destructive Python operation detected: {module}.{attr}()"
+            # Path().unlink/rmdir — check attribute name
+            if attr in ("unlink", "rmdir"):
+                return f"destructive Python operation detected: Path.{attr}()"
+
+        # Check getattr() with destructive string args
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _ATTR_ACCESS_FUNCTIONS and len(node.args) >= 2:
+                attr_arg = node.args[1]
+                if isinstance(attr_arg, ast.Constant) and isinstance(attr_arg.value, str):
+                    if attr_arg.value in _DESTRUCTIVE_FUNCTIONS:
+                        return f"destructive Python operation detected: getattr(..., {attr_arg.value})()"
+                # Concatenated strings: "rem" + "ove" -> check all parts
+                if isinstance(attr_arg, ast.BinOp) and isinstance(attr_arg.op, ast.Add):
+                    parts = _collect_add_parts(attr_arg)
+                    reconstructed = "".join(p for p in parts if isinstance(p, str))
+                    if reconstructed in _DESTRUCTIVE_FUNCTIONS:
+                        return f"destructive Python operation detected: getattr(..., reconstructed destructive name)"
+
+        # Check __import__().attr()
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            # __import__("os").remove()
+            inner_call = node.func.value
+            if isinstance(inner_call, ast.Call) and isinstance(inner_call.func, ast.Name):
+                if inner_call.func.id == "__import__" and inner_call.args:
+                    mod_arg = inner_call.args[0]
+                    if isinstance(mod_arg, ast.Constant) and isinstance(mod_arg.value, str):
+                        if mod_arg.value in _DESTRUCTIVE_MODULE_ATTRS:
+                            attr = node.func.attr
+                            if attr in _DESTRUCTIVE_MODULE_ATTRS[mod_arg.value]:
+                                return f"destructive Python operation detected: __import__('{mod_arg.value}').{attr}()"
+            # importlib.import_module("os").remove()
+            elif isinstance(inner_call, ast.Call) and isinstance(inner_call.func, ast.Attribute):
+                if (isinstance(inner_call.func.value, ast.Name)
+                    and inner_call.func.value.id in ["importlib", "__import__"]
+                    and inner_call.func.attr == "import_module"):
+                    for a in inner_call.args:
+                        if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                            if a.value in _DESTRUCTIVE_MODULE_ATTRS:
+                                attr = node.func.attr
+                                if attr in _DESTRUCTIVE_MODULE_ATTRS[a.value]:
+                                    return f"destructive Python operation detected: importlib.import_module('{a.value}').{attr}()"
+
+        # Check exec/eval with destructive string literals
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _EVAL_LIKE_FUNCTIONS and node.args:
+                code_arg = node.args[0]
+                if isinstance(code_arg, ast.Constant) and isinstance(code_arg.value, str):
+                    # Scan the embedded string for destructive markers
+                    for marker in _DESTRUCTIVE_STRING_MARKERS:
+                        if marker in code_arg.value.lower():
+                            return f"destructive Python operation detected: {node.func.id}() with destructive content"
+
+        # Check alias_map: from os import remove as rm; rm("/tmp/x")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            func_name = node.func.id
+            if func_name in alias_map:
+                module_name, attr = alias_map[func_name]
+                if module_name in _DESTRUCTIVE_MODULE_ATTRS and attr in _DESTRUCTIVE_MODULE_ATTRS[module_name]:
+                    return f"destructive Python operation detected: {module_name}.{attr}() (via import alias)"
+                if module_name == "builtins" and attr == "getattr":
+                    # from builtins import getattr is the same as getattr
+                    pass
+
+        # Check chained imports: import os as X; getattr(X, "remove")()
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _ATTR_ACCESS_FUNCTIONS and len(node.args) >= 2:
+                obj_arg = node.args[0]
+                attr_arg = node.args[1]
+                obj_name = _get_name(obj_arg)
+                if obj_name and obj_name in imported_names:
+                    imported_module = imported_names[obj_name]
+                    if imported_module in _DESTRUCTIVE_MODULE_ATTRS:
+                        if isinstance(attr_arg, ast.Constant) and isinstance(attr_arg.value, str):
+                            if attr_arg.value in _DESTRUCTIVE_MODULE_ATTRS[imported_module]:
+                                return f"destructive Python operation detected: getattr({imported_module}, ...) via alias"
+
+        # Check subprocess/__import__ calls targeting destructive modules
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id == "__import__" and node.args:
+                mod_arg = node.args[0]
+                if isinstance(mod_arg, ast.Constant) and isinstance(mod_arg.value, str):
+                    if mod_arg.value in _DESTRUCTIVE_IMPORT_MODULES:
+                        return f"destructive Python operation detected: dynamic __import__('{mod_arg.value}')"
+
+    return None
+
+
+def _collect_add_parts(node: ast.AST) -> list[str | ast.AST]:
+    """Recursively collect string parts from addition expressions."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _collect_add_parts(node.left)
+        right = _collect_add_parts(node.right)
+        return left + right
+    return [node]
+
+
+def _get_name(node: ast.AST) -> str | None:
+    """Extract the name from a Name or Attribute expression."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return _get_name(node.value)
     return None
 
 

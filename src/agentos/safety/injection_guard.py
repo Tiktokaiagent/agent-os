@@ -146,11 +146,38 @@ _EXFILTRATION_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     ),
 )
 
+# Expanded set of visually invisible / zero-width characters. Includes
+# soft hyphen (U+00AD) and word joiner (U+2060), which are not captured
+# by the bidi / ZWJ ranges and can be inserted between words to bypass
+# intent-phrase regexes that rely on ``\s+`` word separators.
+_INVISIBLE_CHAR_SET: Final[str] = "".join(chr(c) for c in (
+    0x00AD,      # soft hyphen
+    0x200B,      # zero-width space
+    0x200C,      # zero-width non-joiner
+    0x200D,      # zero-width joiner
+    0x200E,      # left-to-right mark
+    0x200F,      # right-to-left mark
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi overrides
+    0x2060,      # word joiner
+    0x2061, 0x2062, 0x2063, 0x2064,  # invisible operators
+    0x2066, 0x2067, 0x2068, 0x2069,  # bidi isolates
+    0xFEFF,      # BOM / zero-width no-break space
+    0xFFF9, 0xFFFA, 0xFFFB,  # interlinear annotation anchors
+))
+
+# Detect invisible chars on the raw text (independent threat class).
+_INVISIBLE_DETECTOR: Final[re.Pattern[str]] = re.compile(
+    f"[{_INVISIBLE_CHAR_SET}]",
+)
+
+# Normalize invisible chars to a single space so that intent-phrase
+# regex patterns using ``\s+`` match across the injection boundary.
+_INVISIBLE_NORMALIZER: Final[re.Pattern[str]] = re.compile(
+    f"[{_INVISIBLE_CHAR_SET}]",
+)
+
 _INVISIBLE_CHAR_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
-    # Zero-width space, ZWNJ, ZWJ, BOM
-    re.compile(r"[\u200b\u200c\u200d\ufeff]"),
-    # Bidi and right-to-left override (used to visually reorder payloads)
-    re.compile(r"[\u202a-\u202e\u2066-\u2069]"),
+    _INVISIBLE_DETECTOR,
 )
 
 INJECTION_PATTERNS: Final[dict[str, tuple[re.Pattern[str], ...]]] = {
@@ -182,16 +209,36 @@ def classify_injection(text: str) -> list[str]:
     (subject to the usual caveat that regex defense is a blunt first
     line, not the only line — see :func:`wrap_untrusted` for the
     structural envelope).
+
+    Invisible characters (soft hyphens, word joiners, bidi controls)
+    are normalized to a single space before matching intent-phrase
+    patterns (``prompt_override``, ``role_hijack``, ``exfiltration``)
+    so that the ``\\s+`` quantifiers match through the bypass.
+    The ``invisible_char`` threat class is detected on the raw text
+    independently.
     """
 
     if not text:
         return []
     hits: set[str] = set()
+
+    # Normalize invisible chars to space so intent-phrase regexes
+    # (which rely on ``\s+``) cannot be bypassed.
+    normalized = _INVISIBLE_NORMALIZER.sub(" ", text)
+
     for threat_class, patterns in INJECTION_PATTERNS.items():
         for pattern in patterns:
-            if pattern.search(text):
-                hits.add(threat_class)
-                break
+            if threat_class == "invisible_char":
+                # Match on raw text to independently detect the
+                # presence of invisible chars as its own threat.
+                if pattern.search(text):
+                    hits.add(threat_class)
+                    break
+            else:
+                # Match on normalized text so \s+ spans invisible chars.
+                if pattern.search(normalized):
+                    hits.add(threat_class)
+                    break
     return sorted(hits)
 
 

@@ -368,3 +368,32 @@ def test_skill_documents_the_read_only_boundary() -> None:
     assert "read-only" in body.lower()
     assert "uiMultiplier()" in body
     assert "4663" in body
+
+
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# RPC URL scheme validation (#815)
+# ---------------------------------------------------------------------------
+
+
+def test_rpc_url_rejects_file_scheme() -> None:
+    """file:// URLs are rejected to prevent local file reads."""
+    with pytest.raises(ValueError, match="unsupported.*rpc-url.*file"):
+        chain_stocks._validate_rpc_url("file:///etc/passwd")
+
+
+def test_rpc_url_rejects_unknown_scheme() -> None:
+    """Unknown URI schemes are rejected."""
+    with pytest.raises(ValueError, match="unsupported.*rpc-url.*"):
+        chain_stocks._validate_rpc_url("ftp://rpc.example.com")
+
+
+def test_rpc_url_accepts_https() -> None:
+    """https:// RPC URLs are allowed."""
+    chain_stocks._validate_rpc_url("https://rpc.mainnet.chain.robinhood.com")
+
+
+def test_rpc_url_accepts_http() -> None:
+    """http:// RPC URLs are allowed."""
+    chain_stocks._validate_rpc_url("http://localhost:8545")

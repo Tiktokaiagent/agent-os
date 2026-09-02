@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 CHAIN_ID = 4663
 DEFAULT_RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
@@ -384,6 +385,15 @@ def _resolve_target(
     return str(match.get("address", "")), match, feeds
 
 
+def _validate_rpc_url(rpc_url: str) -> None:
+    """Reject non-HTTP schemes to prevent file:// URL local file reads (#815)."""
+    parsed = urlparse(rpc_url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"unsupported --rpc-url scheme {parsed.scheme!r}; only http:// and https:// are allowed"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Robinhood Chain on-chain stock reader")
     parser.add_argument("--query", help="Company name or ticker (e.g. Apple, AAPL)")
@@ -407,6 +417,8 @@ def main() -> int:
         help="Do not write the card artifact (JSON on stdout only).",
     )
     args = parser.parse_args()
+
+    _validate_rpc_url(args.rpc_url)
 
     if not args.query and not args.address:
         print(json.dumps({"error": "provide --query or --address"}))

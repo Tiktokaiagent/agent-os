@@ -90,6 +90,9 @@ PROCESS_ACTIONS: frozenset[str] = frozenset(
 # Background process session store
 _bg_sessions: dict[str, _BgSession] = {}
 
+# Max lines stored per background session to prevent OOM from unbounded output growth.
+_BG_OUTPUT_MAX_LINES = 2000
+
 
 @dataclass
 class _BgSession:
@@ -100,6 +103,7 @@ class _BgSession:
     agent_id: str | None = None
     local_urls: list[str] = field(default_factory=list)
     output_lines: list[str] = field(default_factory=list)
+    output_truncated: bool = False
     done: bool = False
     timed_out: bool = False
     killed: bool = False
@@ -475,6 +479,7 @@ def _bg_session_payload(session: _BgSession) -> dict[str, object]:
         "ended_at": session.ended_at,
         "killed": session.killed,
         "timed_out": session.timed_out,
+        "output_truncated": session.output_truncated,
     }
     if session.local_urls:
         payload["local_urls"] = list(session.local_urls)
@@ -562,7 +567,11 @@ async def _read_bg_output(session: _BgSession) -> None:
     if stdout is None:
         return
     while chunk := await stdout.read(4096):
-        session.output_lines.append(chunk.decode("utf-8", errors="replace"))
+        for line in chunk.decode("utf-8", errors="replace").splitlines(keepends=True):
+            if len(session.output_lines) >= _BG_OUTPUT_MAX_LINES:
+                session.output_lines.pop(0)
+                session.output_truncated = True
+            session.output_lines.append(line)
 
 
 def _finalize_bg_session(session: _BgSession) -> None:

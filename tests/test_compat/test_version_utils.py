@@ -30,6 +30,13 @@ from agentos.compat.version_utils import compare_versions, is_newer, parse_versi
         # dev sorts below everything of the same release
         ("2026.7.18.dev1", "2026.7.18rc1", -1),
         ("2026.7.18.dev1", "2026.7.18", -1),
+        # bare .dev (no number) sorts below final and pre-release
+        ("2026.7.18.dev", "2026.7.18", -1),
+        ("2026.7.18.dev", "2026.7.18rc1", -1),
+        ("2026.7.18", "2026.7.18.dev", 1),
+        # .devX on pre-release sorts below the pre-release without dev
+        ("2026.7.18rc1.dev1", "2026.7.18rc1", -1),
+        ("2026.7.18rc1", "2026.7.18rc1.dev1", 1),
         # leading v is tolerated
         ("v2026.7.18", "2026.7.18", 0),
     ],
@@ -54,6 +61,9 @@ def test_is_newer() -> None:
     assert is_newer("2026.7.18", "2026.7.18") is False
     assert is_newer("2026.7.18", "2026.7.19") is False
     assert is_newer("2026.7.18.post1", "2026.7.18") is True
+    # A semver final release is newer than a dev snapshot of the same version
+    assert is_newer("2026.7.18", "2026.7.18.dev") is True
+    assert is_newer("2026.7.18", "2026.7.18.dev1") is True
 
 
 def test_parse_version_fields() -> None:

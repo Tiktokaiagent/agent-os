@@ -147,10 +147,12 @@ _EXFILTRATION_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 )
 
 _INVISIBLE_CHAR_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
-    # Zero-width space, ZWNJ, ZWJ, BOM
-    re.compile(r"[\u200b\u200c\u200d\ufeff]"),
+    # Soft hyphen, zero-width space, ZWNJ, ZWJ, BOM
+    re.compile(r"[\u00ad\u200b\u200c\u200d\ufeff]"),
     # Bidi and right-to-left override (used to visually reorder payloads)
     re.compile(r"[\u202a-\u202e\u2066-\u2069]"),
+    # Word joiner, invisible times/separator, invisible plus, invisible hyphen
+    re.compile(r"[\u2060-\u2064]"),
 )
 
 INJECTION_PATTERNS: Final[dict[str, tuple[re.Pattern[str], ...]]] = {
@@ -174,6 +176,22 @@ class InjectionFinding:
         return asdict(self)
 
 
+_ALL_INVISIBLE_CHARS: re.Pattern[str] = re.compile(
+    r"[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+)
+"""All invisible characters that should be stripped or replaced for text matching."""
+
+
+def _normalize_for_intent_match(text: str) -> str:
+    """Replace invisible characters with a space for intent-phrase matching.
+
+    This prevents prompts like ``ignore\u00adall prior instructions`` from
+    bypassing the intent-phrase regexes while retaining the word boundaries
+    the patterns expect.
+    """
+    return _ALL_INVISIBLE_CHARS.sub(" ", text)
+
+
 def classify_injection(text: str) -> list[str]:
     """Return sorted labels of threat classes whose regex matched ``text``.
 
@@ -182,14 +200,21 @@ def classify_injection(text: str) -> list[str]:
     (subject to the usual caveat that regex defense is a blunt first
     line, not the only line — see :func:`wrap_untrusted` for the
     structural envelope).
+
+    Intent-phrase threat classes (``prompt_override``, ``role_hijack``,
+    ``exfiltration``) are matched against a copy of the text with invisible
+    characters replaced by spaces, so split phrases still produce matches.
+    The ``invisible_char`` class is matched against the original text.
     """
 
     if not text:
         return []
     hits: set[str] = set()
+    normalized = _normalize_for_intent_match(text)
     for threat_class, patterns in INJECTION_PATTERNS.items():
+        search_text = text if threat_class == "invisible_char" else normalized
         for pattern in patterns:
-            if pattern.search(text):
+            if pattern.search(search_text):
                 hits.add(threat_class)
                 break
     return sorted(hits)

@@ -15,7 +15,7 @@ def _make_env() -> Environment:
         undefined=StrictUndefined,
         trim_blocks=True,
         lstrip_blocks=True,
-        autoescape=False,
+        autoescape=True,
     )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -269,6 +270,11 @@ def _price_chain(answer: int, updated_at: int, paused: int = 0) -> _FakeChain:
     proxy = str(_FEEDS[0]["proxyAddress"]).lower()
     return _FakeChain(
         {
+            (AAPL, chain_stocks.SEL_SYMBOL): "0x"
+            + _word_hex(32) + _word_hex(4) + b"AAPL".hex().ljust(64, "0"),
+            (AAPL, chain_stocks.SEL_DECIMALS): "0x" + _word_hex(18),
+            (AAPL, chain_stocks.SEL_TOTAL_SUPPLY): "0x" + _word_hex(10301407498610000000000),
+            (AAPL, chain_stocks.SEL_UI_MULTIPLIER): "0x" + _word_hex(1),
             (AAPL, chain_stocks.SEL_ORACLE_PAUSED): "0x" + _word_hex(paused),
             (proxy, chain_stocks.SEL_LATEST_ROUND_DATA): "0x"
             + "".join(_word_hex(v) for v in (1, answer, 0, updated_at, 1)),
@@ -324,7 +330,8 @@ def test_inspect_token_degrades_instead_of_raising(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(chain_stocks, "_eth_call", _FakeChain({}))
     state = chain_stocks.inspect_token("rpc", AAPL, 5.0, feed=_FEEDS[0])
     assert state["isStockToken"] is False
-    assert set(state["readErrors"]) >= {"symbol", "decimals", "totalSupply", "price"}
+    # Price is not attempted for proven impersonators (#866)
+    assert set(state["readErrors"]) >= {"symbol", "decimals", "totalSupply", "uiMultiplier"}
 
 
 def test_unreachable_node_leaves_stock_status_unknown_not_false(
@@ -470,3 +477,198 @@ def test_eth_call_handle_dict_error() -> None:
             chain_stocks._eth_call("http://127.0.0.1:8545",
                 "0x0000000000000000000000000000000000000000", "0x", 5.0)
         assert "execution reverted" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# #866: inspect_token must not attach price to proven impersonators
+# ---------------------------------------------------------------------------
+
+
+_FAKE_ADDR = "0xdeadbeef00000000000000000000000000dead"
+_FAKE_FEED_PROXY = "0x1111111111111111111111111111111111111111"
+_GME_FEEDS = [{
+    "name": "Robinhood GME / USD",
+    "proxyAddress": _FAKE_FEED_PROXY,
+    "heartbeat": 86400,
+    "threshold": 0.5,
+    "docs": {"baseAsset": "GME"},
+}]
+
+# ABI-encoded "GME" string (dynamic bytes):
+# offset(32) + length(32) + "GME".hex() padded
+_GME_SYMBOL_RESULT = (
+    "0x"
+    + (32).to_bytes(32, "big").hex()
+    + (3).to_bytes(32, "big").hex()
+    + "474d4500000000000000000000000000000000000000000000000000000000"
+)
+
+# ABI-encoded "AAPL" string
+_AAPL_SYMBOL_RESULT = (
+    "0x"
+    + (32).to_bytes(32, "big").hex()
+    + (4).to_bytes(32, "big").hex()
+    + "4141504c00000000000000000000000000000000000000000000000000000000"
+)
+
+# ABI-encoded uint256(1) for uiMultiplier
+_MULTIPLIER_UNIT = "0x" + (1).to_bytes(32, "big").hex()
+
+
+def _fake_eth_call_impersonator_returns_real_ticker(
+    rpc_url: str, to: str, data: str, timeout: float
+) -> str:
+    """Mock _eth_call for an impersonator that passes symbol()
+    but reverts on uiMultiplier().
+    """
+    if to == _FAKE_ADDR and data == chain_stocks.SEL_SYMBOL:
+        return _GME_SYMBOL_RESULT
+    if to == _FAKE_ADDR and data == chain_stocks.SEL_DECIMALS:
+        return "0x" + (18).to_bytes(32, "big").hex()
+    if to == _FAKE_ADDR and data == chain_stocks.SEL_TOTAL_SUPPLY:
+        return "0x" + (1_000_000 * 10**18).to_bytes(32, "big").hex()
+    if to == _FAKE_ADDR and data == chain_stocks.SEL_UI_MULTIPLIER:
+        raise chain_stocks.RpcError("execution reverted")
+    if to == _FAKE_ADDR and data == chain_stocks.SEL_ORACLE_PAUSED:
+        return "0x" + (0).to_bytes(32, "big").hex()
+    if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_LATEST_ROUND_DATA:
+        now = int(__import__("time").time())
+        return "0x" + (
+            (1).to_bytes(32, "big").hex()
+            + (250000000000).to_bytes(32, "big").hex()
+            + (1).to_bytes(32, "big").hex()
+            + (now).to_bytes(32, "big").hex()
+            + (1).to_bytes(32, "big").hex()
+        )
+    if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_DECIMALS:
+        return "0x" + (8).to_bytes(32, "big").hex()
+    raise NotImplementedError(f"unexpected call to={to} data={data}")
+
+
+def test_inspect_token_no_price_for_impersonator() -> None:
+    """#866: An impersonator (isStockToken=False) must not get a price,
+    even if its symbol() matches a real company ticker.
+    """
+    with patch.object(chain_stocks, "_eth_call",
+                      side_effect=_fake_eth_call_impersonator_returns_real_ticker):
+        result = chain_stocks.inspect_token(
+            "http://127.0.0.1:8545", _FAKE_ADDR, 5.0, feeds=_GME_FEEDS)
+    assert result["isStockToken"] is False, "impersonator must be flagged"
+    assert "price" not in result, (
+        "impersonator with isStockToken=False must not get a real price"
+    )
+
+
+def test_inspect_token_has_price_for_genuine_token() -> None:
+    """#866: A genuine Stock Token (isStockToken=True) still gets its price."""
+    def mock_eth_call(rpc_url, to, data, timeout):
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_SYMBOL:
+            return _GME_SYMBOL_RESULT
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_UI_MULTIPLIER:
+            return _MULTIPLIER_UNIT  # proven Stock Token
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_DECIMALS:
+            return "0x" + (18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_TOTAL_SUPPLY:
+            return "0x" + (1_000_000 * 10**18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_ORACLE_PAUSED:
+            return "0x" + (0).to_bytes(32, "big").hex()
+        if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_LATEST_ROUND_DATA:
+            now = int(__import__("time").time())
+            return "0x" + (
+                (1).to_bytes(32, "big").hex()
+                + (250000000000).to_bytes(32, "big").hex()
+                + (1).to_bytes(32, "big").hex()
+                + (now).to_bytes(32, "big").hex()
+                + (1).to_bytes(32, "big").hex()
+            )
+        if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_DECIMALS:
+            return "0x" + (8).to_bytes(32, "big").hex()
+        raise NotImplementedError(f"unexpected to={to} data={data}")
+
+    with patch.object(chain_stocks, "_eth_call", side_effect=mock_eth_call):
+        result = chain_stocks.inspect_token(
+            "http://127.0.0.1:8545", _FAKE_ADDR, 5.0, feeds=_GME_FEEDS)
+    assert result["isStockToken"] is True
+    assert "price" in result, "genuine Stock Token must have price"
+    assert result["price"]["usd"] is not None
+
+
+def test_inspect_token_no_price_when_unverified() -> None:
+    """#866: When isStockToken is None (node unreachable), no price
+    should be attached — the caller cannot know.
+    """
+    def mock_eth_call_unreachable(rpc_url, to, data, timeout):
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_SYMBOL:
+            return _GME_SYMBOL_RESULT
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_DECIMALS:
+            return "0x" + (18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_TOTAL_SUPPLY:
+            return "0x" + (1_000_000 * 10**18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_UI_MULTIPLIER:
+            raise chain_stocks.RpcError("execution reverted")
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_ORACLE_PAUSED:
+            return "0x" + (0).to_bytes(32, "big").hex()
+        raise NotImplementedError(f"unexpected to={to} data={data}")
+
+    with patch.object(chain_stocks, "_eth_call", side_effect=mock_eth_call_unreachable):
+        result = chain_stocks.inspect_token(
+            "http://127.0.0.1:8545", _FAKE_ADDR, 5.0, feeds=_GME_FEEDS)
+    assert result["isStockToken"] is False
+    assert "price" not in result, "unverified must not have price"
+
+
+def test_inspect_token_price_skipped_when_feed_explicitly_passed() -> None:
+    """#866: When a feed IS passed explicitly AND the token is an
+    impersonator, the price must still be suppressed. The guard
+    must be in inspect_token itself, not just in the auto-resolve path.
+    """
+    with patch.object(chain_stocks, "_eth_call",
+                      side_effect=_fake_eth_call_impersonator_returns_real_ticker):
+        result = chain_stocks.inspect_token(
+            "http://127.0.0.1:8545", _FAKE_ADDR, 5.0,
+            feed=_GME_FEEDS[0], feeds=_GME_FEEDS)
+    assert result["isStockToken"] is False
+    assert "price" not in result, "impersonator must not get price even with explicit feed"
+
+
+def test_inspect_token_price_for_genuine_token_with_explicit_feed() -> None:
+    """#866: A genuine token with an explicitly passed feed still gets price."""
+    def mock_true_token(rpc_url, to, data, timeout):
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_UI_MULTIPLIER:
+            return _MULTIPLIER_UNIT
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_SYMBOL:
+            return _GME_SYMBOL_RESULT
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_DECIMALS:
+            return "0x" + (18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_TOTAL_SUPPLY:
+            return "0x" + (1_000_000 * 10**18).to_bytes(32, "big").hex()
+        if to == _FAKE_ADDR and data == chain_stocks.SEL_ORACLE_PAUSED:
+            return "0x" + (0).to_bytes(32, "big").hex()
+        if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_LATEST_ROUND_DATA:
+            now = int(__import__("time").time())
+            return "0x" + (
+                (1).to_bytes(32, "big").hex()
+                + (250000000000).to_bytes(32, "big").hex()
+                + (1).to_bytes(32, "big").hex()
+                + (now).to_bytes(32, "big").hex()
+                + (1).to_bytes(32, "big").hex()
+            )
+        if to == _FAKE_FEED_PROXY and data == chain_stocks.SEL_DECIMALS:
+            return "0x" + (8).to_bytes(32, "big").hex()
+        raise NotImplementedError(f"unexpected to={to} data={data}")
+
+    with patch.object(chain_stocks, "_eth_call", side_effect=mock_true_token):
+        result = chain_stocks.inspect_token(
+            "http://127.0.0.1:8545", _FAKE_ADDR, 5.0,
+            feed=_GME_FEEDS[0], feeds=_GME_FEEDS)
+    assert result["isStockToken"] is True
+    assert "price" in result, "genuine token with explicit feed must have price"
+
+
+def test_find_feed_not_interfered_by_guard() -> None:
+    """#866: find_feed itself is not affected — only inspect_token.
+    This test verifies find_feed still resolves a ticker.
+    """
+    feed = chain_stocks.find_feed("GME", _GME_FEEDS)
+    assert feed is not None
+    assert feed["proxyAddress"] == _FAKE_FEED_PROXY

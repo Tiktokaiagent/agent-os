@@ -341,14 +341,17 @@ def inspect_token(
     if paused is not None:
         out["oraclePaused"] = bool(paused)
 
-    # Prefer the ticker the contract reports over any caller-supplied hint, so
-    # an address-only run resolves its own feed.
-    if feed is None and feeds:
+    # Only resolve a price feed for genuine Stock Tokens. An impersonator
+    # that passes symbol() but reverts on uiMultiplier() must not get a real
+    # company's Chainlink price attached to its result (see #866).
+    if feed is None and feeds and out.get("isStockToken") is True:
         onchain_symbol = out.get("onchainSymbol")
         if isinstance(onchain_symbol, str) and onchain_symbol:
             feed = find_feed(onchain_symbol, feeds)
 
-    if feed is not None:
+    # Also guard the explicit-feed path: a caller that passes both a feed
+    # and a proven-impersonator address must not get a price either.
+    if feed is not None and out.get("isStockToken") is True:
         price = _try(
             lambda: _read_price(rpc_url, str(feed["proxyAddress"]), timeout, now), errors, "price"
         )

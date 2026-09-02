@@ -17,6 +17,13 @@ src/agentos/memory/models/embeddings/**/*.txt text eol=lf
 src/agentos/agentos_router/models/pilot_v1/*.onnx filter=lfs diff=lfs merge=lfs -text
 src/agentos/agentos_router/models/pilot_v1/*.json text eol=lf
 
-# React control console source and assets. Normalised to LF so Prettier
-# line-ending checks pass consistently across platforms.
-frontend/** text=auto eol=lf
+# Frontend source — enforce LF end-of-line across all OS
+# Prevents Prettier CRLF failures on Windows checkouts
+frontend/**/*.ts text eol=lf
+frontend/**/*.tsx text eol=lf
+frontend/**/*.js text eol=lf
+frontend/**/*.jsx text eol=lf
+frontend/**/*.json text eol=lf
+frontend/**/*.css text eol=lf
+frontend/**/*.html text eol=lf
+frontend/**/*.md text eol=lf

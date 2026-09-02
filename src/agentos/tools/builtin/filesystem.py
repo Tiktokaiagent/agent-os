@@ -923,7 +923,16 @@ async def list_dir(path: str) -> str:
             if entry.is_dir():
                 dirs.append(f"[dir]  {entry.name}/")
             else:
-                size = entry.stat().st_size
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    # Broken/dangling symlink — stat follows the target and fails.
+                    # Fall back to lstat (does not follow) so the entry is
+                    # still reported rather than crashing the whole listing.
+                    try:
+                        size = entry.lstat().st_size
+                    except OSError:
+                        size = 0
                 files.append(f"[file] {entry.name} ({size} bytes)")
         return dirs + files + blocked_entries
 

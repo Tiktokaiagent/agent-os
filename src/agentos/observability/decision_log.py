@@ -276,7 +276,12 @@ def load_entries(path: Path) -> list[DecisionEntry]:
         line = line.strip()
         if not line:
             continue
-        payload = json.loads(line)
+        try:
+            payload = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            # Skip corrupted / partial JSONL lines (e.g. from a process
+            # killed mid-turn) so historical cost reporting survives.
+            continue
         payload = _coerce_decision_payload(payload)
         steps_payload = payload.pop("pipeline_steps", [])
         steps = [

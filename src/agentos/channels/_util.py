@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -350,3 +351,18 @@ async def retry_request(
                 continue
             raise
     raise last_exc or RuntimeError("retry_request exhausted")
+
+
+#: 25 MB ceiling for send_file — prevents memory exhaustion from oversized uploads.
+_SEND_FILE_MAX_BYTES: int = 25 * 1024 * 1024
+
+
+def _check_file_size(path: Path) -> None:
+    """Raise ValueError if file exceeds the send_file size limit."""
+    st = path.stat()
+    if st.st_size > _SEND_FILE_MAX_BYTES:
+        size_mb = st.st_size / (1024 * 1024)
+        raise ValueError(
+            f"send_file refused: {path.name} is {size_mb:.1f} MB, "
+            f"limit is {_SEND_FILE_MAX_BYTES // (1024 * 1024)} MB"
+        )

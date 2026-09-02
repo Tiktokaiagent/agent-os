@@ -29,6 +29,7 @@ from agentos.channels._util import (
     EventDedupeCache,
     RateLimiter,
     StreamThrottle,
+    _check_file_size,
     retry_request,
 )
 from agentos.channels.contract import (
@@ -1024,6 +1025,7 @@ class DiscordChannel:
     ) -> ChannelSendResult:
         await self._rate_limiter.acquire()
         client = self._get_client()
+        _check_file_size(Path(file_path))
         with open(file_path, "rb") as f:
             resp = await retry_request(
                 client.post,

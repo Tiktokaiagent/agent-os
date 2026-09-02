@@ -60,6 +60,7 @@ from agentos.channels._util import (
     AccessDecision,
     ChannelAccessPolicy,
     EventDedupeCache,
+    _check_file_size,
 )
 from agentos.channels.contract import (
     ChannelCapabilities,
@@ -75,6 +76,7 @@ from agentos.channels.types import (
 )
 
 log = structlog.get_logger(__name__)
+
 
 # Channel-contract constants pinned by the adapter audit.
 CAPABILITY_TIER = "GREEN-shipping"
@@ -785,6 +787,7 @@ class EmailChannel:
         """Mail one file back into ``thread_id`` as an attachment."""
 
         path = Path(file_path)
+        _check_file_size(path)
         try:
             payload = path.read_bytes()
             to_address, subject, in_reply_to, references = self._resolve_target(

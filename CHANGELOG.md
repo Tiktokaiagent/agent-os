@@ -67,6 +67,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Channel send_file implementations (email, discord, telegram) now
+  enforce a 25 MB pre-read size ceiling via stat().st_size, preventing
+  memory exhaustion from oversized uploads (#683).
+
 - Telegram Bot API calls now retry `ConnectTimeout` and `PoolTimeout` alongside
   `ConnectError`. All three happen before any request bytes reach Telegram — a
   DNS/TLS handshake that never completed, or a wait for a pooled connection —
@@ -205,6 +209,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   dirty until a retry succeeds. The initial `start()` pass re-enqueues too,
   where `_mtimes` is empty and the watcher diff could never have recovered the
   path (#638).
+
+- `OtlpTraceSink.flush()` is serialized by the `_flush_lock` it always
+  declared but never acquired. Concurrent flushes — a `write()` batch trigger
+  racing the periodic flush task — could post to the OTLP collector
+  simultaneously, delivering spans out of order and, when a post failed,
+  re-queueing the same events twice so they were duplicated in the queue. The
+  lock is now held across the drain-post-requeue cycle, with an empty-queue
+  fast path before it so the uncontended case stays allocation-free
+  ([#672](https://github.com/use-agent-os/agent-os/issues/672)).
+- `agentos sessions export` derives its default filename through
+  `_safe_archive_part` instead of only replacing `:`. A session id is
+  gateway-supplied text, and every character outside `[A-Za-z0-9_.-]` — a `/`
+  or a `..` segment among them — reached `Path()` untouched, so the export
+  could be written outside the directory the command was run in. The shared
+  helper also now strips leading and trailing dots, so an id that sanitizes to
+  `..` can no longer name the parent directory
+  ([#678](https://github.com/use-agent-os/agent-os/issues/678)).
+- HTTP chat errors name the provider that actually failed.
+  `_provider_display_name` mapped only a handful of kinds, so Azure, Bailian,
+  Mistral, Groq, SiliconFlow, AIHubMix, MiniMax, BytePlus, Bankr, vLLM,
+  LM Studio and OVMS all surfaced as a generic "Provider" in the message the
+  user reads.
+
+### Security
+
+- The MCP SSE and Streamable HTTP transports now connect through the same
+  SSRF guard as the built-in HTTP tools. Both built a bare `httpx.AsyncClient`
+  from `MCPServerConfig.url` with no validation at all, so an MCP server entry
+  pointed at `169.254.169.254` reached the cloud metadata endpoint and its
+  instance credentials.
+
+  The policy is `validate_metadata_only_address` — the floor `http_request`
+  takes — not the full `validate_http_url_for_fetch`: `http://localhost:PORT/mcp`
+  and LAN-hosted MCP servers are the normal, intended configuration, and the
+  stricter policy rejects loopback and private ranges. The guard is installed as
+  a connect-time network backend (`ssrf_guarded_client`) rather than run once
+  against the URL text, so the address that gets validated is the address that
+  gets dialed: checking the URL and then handing it to a plain client leaves
+  httpx to resolve the hostname a second time, which a short-TTL DNS-rebinding
+  name can answer differently. Non-`http(s)` server URLs are now rejected up
+  front. ([#662](https://github.com/use-agent-os/agent-os/issues/662))
 
 - `OtlpTraceSink.flush()` is serialized by the `_flush_lock` it always
   declared but never acquired. Concurrent flushes — a `write()` batch trigger

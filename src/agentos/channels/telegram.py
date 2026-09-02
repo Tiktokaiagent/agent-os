@@ -30,6 +30,7 @@ from agentos.channels._util import (
     EventDedupeCache,
     FloodStrikeBackoff,
     StreamThrottle,
+    _check_file_size,
 )
 from agentos.channels.contract import (
     ChannelCapabilities,
@@ -1424,6 +1425,7 @@ class TelegramChannel:
         if not self.config.token:
             raise ValueError("telegram.send_file requires token")
         path = Path(file_path)
+        _check_file_size(path)
         payload = {"chat_id": str(chat_id)}
         if content:
             payload["caption"] = render_telegram_html(content)

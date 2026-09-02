@@ -33,6 +33,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- TaskRouting now retains the cached channel route envelope for a session as
+  long as the session still has queued or running work. Previously
+  ``_mark_terminal()`` unconditionally evicted the envelope when any task
+  completed, so ``TaskRuntime.send()`` built a generic
+  ``SourceKind.SYSTEM`` envelope and lost channel routing metadata even
+  when another task for the same session was still pending (#930).
 - Telegram Bot API calls now retry `ConnectTimeout` and `PoolTimeout` alongside
   `ConnectError`. All three happen before any request bytes reach Telegram — a
   DNS/TLS handshake that never completed, or a wait for a pooled connection —

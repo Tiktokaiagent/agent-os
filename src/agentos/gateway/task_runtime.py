@@ -1160,12 +1160,20 @@ class TaskRuntime:
             if self._running_by_session.get(task.envelope.session_key) is task:
                 self._running_by_session.pop(task.envelope.session_key, None)
             self._tasks.pop(task.task_id, None)
-            self._last_envelope_by_session.pop(task.envelope.session_key, None)
             # Keep the short write lock stable for this session. Popping it can
             # split callers across old/new lock objects while callbacks or
             # late lifecycle events still reference the old one. The dict grows
             # at most by unique session_keys, which is acceptable.
             session_key = task.envelope.session_key
+            # Only discard the cached route envelope when this session has
+            # no more work.  If another task is still queued or running,
+            # keep the envelope so TaskRuntime.send() reuses the channel
+            # routing metadata (issue #930).
+            if (
+                session_key not in self._pending_by_session
+                and self._running_by_session.get(session_key) is None
+            ):
+                self._last_envelope_by_session.pop(task.envelope.session_key, None)
             # Clean up RR deque entry when session has no more work.
             if (
                 not self._pending_by_session.get(session_key)

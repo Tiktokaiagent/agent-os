@@ -658,7 +658,7 @@ def _search_payload(
         "query": query,
         "provider": provider_name,
         "results": [
-                {"title": r.title, "url": r.url, "snippet": r.snippet, "source": r.source}
+                {"title": r.title, "url": r.url, "snippet": r.snippet, "source": r.source or ""}
                 for r in results
             ],
     }

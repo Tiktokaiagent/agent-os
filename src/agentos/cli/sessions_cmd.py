@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,6 @@ from agentos.cli.chat.session_state import messages_to_markdown
 from agentos.cli.gateway_rpc import default_gateway_token, default_gateway_url, run_gateway_sync
 from agentos.cli.output import print_json
 from agentos.cli.ui import ACCENT, ACCENT_HEADER, console, error_panel, markup_escape
-from agentos.session.manager import _safe_archive_part
 
 app = typer.Typer(help="Manage chat sessions.")
 
@@ -378,7 +378,7 @@ def sessions_export(
     if result is None:
         console.print("[red]Session export returned no data.[/red]")
         return
-    target = output or Path(f"{_safe_archive_part(session_id)}.{format}")
+    target = output or Path(f"{re.sub(r'[^a-zA-Z0-9_-]', '_', session_id)}.{format}")
     if format == "json":
         target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     else:

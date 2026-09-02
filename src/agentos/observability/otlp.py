@@ -230,18 +230,14 @@ class OtlpTraceSink(TraceSink):
     async def flush(self) -> bool:
         """Flush all buffered events to the OTLP HTTP collector.
 
-        Serialized across callers via ``_flush_lock`` so only one HTTP export
-        is in flight at a time: concurrent flushes would otherwise deliver
-        spans out of order and, on failure, re-queue the same events twice.
+        Acquires ``_flush_lock`` so concurrent calls from batch-triggered
+        flush and ``_periodic_flush`` do not race.
         """
-        import httpx
-
-        # fast path: nothing buffered — no need to serialize
-        with self._queue_lock:
-            if not self._queue:
-                return True
-
+        if self._flush_lock.locked():
+            return False
         async with self._flush_lock:
+            import httpx
+
             with self._queue_lock:
                 if not self._queue:
                     return True

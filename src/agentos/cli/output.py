@@ -9,9 +9,18 @@ import typer
 
 
 def print_json(payload: Any) -> None:
-    """Print JSON payload to stdout using the AgentOS CLI contract."""
+    """Print JSON payload to stdout using the AgentOS CLI contract.
 
-    typer.echo(json.dumps(payload, ensure_ascii=False, default=str))
+    Writes UTF-8 bytes directly to avoid UnicodeEncodeError on terminals
+    with non-UTF-8 encoding (e.g. Windows cp1252, cp437).
+    """
+    text = json.dumps(payload, ensure_ascii=False, default=str)
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        # Fallback: write UTF-8 bytes to stdout buffer
+        import sys
+        sys.stdout.buffer.write((text + "\n").encode("utf-8"))
 
 
 def error_payload(
@@ -40,13 +49,15 @@ def emit_error(
     """Emit an error to stderr without polluting JSON stdout."""
 
     if json_output:
-        typer.echo(
-            json.dumps(
-                error_payload(message, code=code, details=details),
-                ensure_ascii=False,
-                default=str,
-            ),
-            err=True,
+        text = json.dumps(
+            error_payload(message, code=code, details=details),
+            ensure_ascii=False,
+            default=str,
         )
+        try:
+            typer.echo(text, err=True)
+        except UnicodeEncodeError:
+            import sys
+            sys.stderr.buffer.write((text + "\n").encode("utf-8"))
     else:
         typer.secho(f"Error: {message}", fg=typer.colors.RED, err=True)

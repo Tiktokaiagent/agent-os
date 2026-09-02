@@ -8,15 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Telegram Bot API calls now retry `ConnectTimeout` and `PoolTimeout` alongside
-  `ConnectError`. All three happen before any request bytes reach Telegram — a
-  DNS/TLS handshake that never completed, or a wait for a pooled connection —
-  but the two timeouts are `TimeoutException` siblings of `ConnectError` rather
-  than subclasses, so `TelegramChannel._api()` dropped them into its generic
-  `RequestError` branch and raised on the very first attempt with zero retries.
-  `ReadTimeout` stays out of the retry path on purpose: by then the request is
-  in flight, and re-sending a `getUpdates` long poll would double-poll it.
-  ([#651](https://github.com/use-agent-os/agent-os/issues/651))
+- TaskRuntime queue depth gauge (`agentos_queue_depth`) now decrements when
+  tasks leave the pending queue, instead of staying stuck at the peak enqueue
+  value (#668).
+- Bare `.dev` version segments (no number) now correctly sort before the
+  final release, and pre-release `.devN` snapshots sort before their
+  corresponding release candidate instead of after it, fixing PEP 440
+  ordering and the upgrade notice for development builds (#740).
+- Slack webhook `_verify_signature` now decodes the body with `latin-1`
+  instead of UTF-8, preventing `UnicodeDecodeError` HTTP 500 on non-UTF-8
+  request bodies (#680).
 - **`robinhood-rwa-addresses` now verifies every address against Robinhood
   Chain instead of trusting the token index.** The skill decided what counted
   as a genuine Stock Token from a name suffix in CoinGecko's list, which was
@@ -52,15 +53,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `/*`, `/*/*`, `/**`, `/?*`, `/.*` and `/[a-z]*`. Globs that name a subset
   (`/tmp*`) are untouched, and root counts as sensitive only in the
   delete-intent scan — reading or listing `/` stays ordinary work (#563).
-- The image tool now reports a redirect that carries no `Location` header
-  instead of the confusing failure it caused downstream. `_fetch_image_url`
-  follows redirects itself so every hop is re-validated against the SSRF guard;
-  a 3xx with no `Location` closed the response and fell out of the loop, so the
-  failure surfaced as httpx's generic `Failed to fetch image from URL: Redirect
-  response '302 Found' for url ...` (or a `StreamClosed` from reading the body
-  that had just been closed, depending on the httpx version) rather than the
-  dead-end hop that actually broke. It now raises `Redirect response from <url>
-  missing Location header`, naming the URL that returned it.
 - Channel HTTP retries now cover every transient timeout, survive an
   HTTP-date `Retry-After`, and hand back an exhausted rate limit.
   `retry_request` caught `(ConnectError, ReadTimeout)`, but `ConnectTimeout`,
@@ -78,45 +70,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rate limit returns the response — status, headers and provider error body
   intact — instead of sleeping once more and raising a bare
   `RuntimeError("retry_request exhausted")` (#642, #599).
-- The email channel can poll an IMAP folder whose name contains spaces.
-  `imap_folder` was handed to `imaplib` verbatim, and `imaplib` does not quote
-  mailbox arguments, so a folder such as `Sent Items` — ordinary on
-  Exchange/Outlook — went on the wire as two tokens and every poll failed with
-  an opaque `BAD [CLIENTBUG] Invalid syntax`. The name is now emitted as an
-  RFC 3501 quoted-string, escaping `\` and `"`, and a name carrying a control
-  character (a CR or LF would have ended the command line and run its tail as a
-  second IMAP command) is refused at channel start instead of at poll time.
 - `SubscriptionManager._message_subs` now removes empty sets on
   unsubscription and connection teardown, preventing a slow memory leak
   on long-running gateways (#609).
-- An email reply no longer drops the thread root when the inbound message
-  carries no `References` header. `_merge_references` read only `References`,
-  so for the second message of a thread — where most mail clients send
-  `In-Reply-To` alone — the parent id was discarded and the outgoing reply
-  referenced only itself, breaking the conversation apart in Gmail, Outlook and
-  Thunderbird. The chain now falls back to `In-Reply-To` when `References` is
-  absent, per RFC 5322 3.6.4. Both threading headers are now read by one
-  parser that drops comments and accepts ids with or without angle brackets,
-  and `thread_key_for` shares it, so the thread cache key and the reference
-  chain can no longer disagree about which message is the root (#620).
 - The Environment view's path strip shortens Windows paths again. `shortPath`
   split on `/` only, so a gateway-reported `C:\Users\<name>\.agentos\.env` counted
   as a single segment and was rendered untrimmed, overflowing the header strip
   it was written to keep short. Backslashes are normalised before splitting, so
   Windows and mixed-separator paths trim to their last two segments like POSIX
   ones do.
-- Provider content-moderation blocks are classified as `POLICY_REFUSAL` again
-  instead of falling through to `BAD_REQUEST`/`UNKNOWN`. `_is_policy_refusal()`
-  held only generic phrasing, so the wording providers actually emit went
-  unmatched: Azure OpenAI's canonical *"triggering Azure OpenAI's content
-  management policy"* does not contain the adjacent words "content policy", the
-  OpenAI/Azure `content_filter` code and `finish_reason` matched nothing, and
-  Gemini's "blocked by safety" is not "safety policy". Since a refusal and a
-  malformed request map to different recovery actions, the misclassification
-  sent real policy blocks down the wrong path. Added `content_filter`,
-  `content filter`, `responsible_ai_policy`, `content management policy` and
-  `blocked by safety` (#629).
-
 - Cron schedules that restrict both day-of-month and day-of-week now follow the
   POSIX OR rule instead of ANDing the two fields. `0 0 1,15 * 5` means "the 1st,
   the 15th, or any Friday" — as it does in cron, croniter, and every scheduler
@@ -130,19 +92,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   "next runs" preview (`frontend/src/views/cron/logic.ts`) has always applied
   the OR rule — so the times it showed disagreed with when the job actually
   fired. ([#660](https://github.com/use-agent-os/agent-os/issues/660))
-- `MemorySyncManager` retries a file whose indexing failed instead of losing it
-  until the next edit. `_do_file_sync()` replaced `_mtimes` with the fresh scan
-  *before* the index loop ran, so by the time `store.index_file()` raised, the
-  failing path was already recorded as seen — the next watcher tick compared
-  equal, the path never entered `changes`, and the retry its docstring promised
-  never happened. A transient store error (SQLite lock, provider timeout) on
-  `MEMORY.md` therefore left searches running against a stale or missing index
-  for that file until it was modified again or the process restarted. Index
-  failures now come back from `_do_file_sync()` alongside the existing delete
-  failures and are re-enqueued into `_pending_changes`, keeping the manager
-  dirty until a retry succeeds. The initial `start()` pass re-enqueues too,
-  where `_mtimes` is empty and the watcher diff could never have recovered the
-  path (#638).
 
 ## [2026.9.2] - 2026-09-02
 

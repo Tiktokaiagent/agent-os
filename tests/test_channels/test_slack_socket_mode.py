@@ -338,6 +338,31 @@ def test_reply_helpers_thread_root_when_enabled() -> None:
     }
 
 
+def test_verify_signature_latin1_non_utf8() -> None:
+    """_verify_signature handles non-UTF-8 body bytes without crashing."""
+    import hashlib
+    import hmac
+
+    ch = _mk(signing_secret="sekret")
+    # Non-UTF-8 bytes (0xFF, 0xFE are invalid UTF-8 start bytes)
+    body = b"\xff\fehello"
+    timestamp = "1700000000"
+    # Compute what the expected signature should be with latin-1 decode
+    sig_basestring = f"v0:{timestamp}:{body.decode('latin-1')}"
+    expected = "v0=" + hmac.HMAC(
+        b"sekret",
+        sig_basestring.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+    # Should not raise UnicodeDecodeError
+    result = ch._verify_signature(body, timestamp, expected)
+    assert result is True
+
+    # Wrong signature returns False
+    assert ch._verify_signature(body, timestamp, "v0:wrong") is False
+
+
 def test_channel_manager_skips_webhook_route_for_slack_socket_mode() -> None:
     manager = ChannelManager(
         _channels={

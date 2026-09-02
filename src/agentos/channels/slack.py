@@ -989,7 +989,7 @@ class SlackChannel:
         """Verify Slack request signature using HMAC-SHA256."""
         if self.signing_secret is None:
             return False
-        sig_basestring = f"v0:{timestamp}:{body.decode()}"
+        sig_basestring = f"v0:{timestamp}:{body.decode('latin-1')}"
         expected = (
             "v0="
             + hmac.HMAC(

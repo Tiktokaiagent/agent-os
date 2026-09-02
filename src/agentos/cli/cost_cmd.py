@@ -106,8 +106,10 @@ def cost(
                         int(row.get("created_at") or row.get("createdAt") or 0),
                     ]
                 )
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f.getvalue(), encoding="utf-8")
         else:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         console.print(f"Exported usage data to {export_path}")
         return

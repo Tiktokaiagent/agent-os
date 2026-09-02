@@ -146,7 +146,7 @@ class MCPStreamableHTTPClient(MCPClient):
     async def connect(self) -> None:
         if not self.config.url:
             raise ValueError("Streamable HTTP MCP server requires a URL")
-        validate_http_url_for_fetch(self.config.url)
+        validate_http_url_for_fetch(self.config.url)  # type: ignore[arg-type]  # validated above
 
         try:
             from mcp.client.auth import OAuthClientProvider

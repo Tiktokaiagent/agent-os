@@ -71,7 +71,9 @@ class MCPSSEClient(MCPClient):
 
     async def connect(self) -> None:
         """Create the HTTP client session and perform MCP initialization handshake."""
-        validate_http_url_for_fetch(self.config.url)
+        url = self.config.url
+        if url:
+            validate_http_url_for_fetch(url)
         self._client = httpx.AsyncClient(trust_env=_trust_env())
 
         # Send initialize request (response is acknowledged server-side;

@@ -989,7 +989,13 @@ class SlackChannel:
         """Verify Slack request signature using HMAC-SHA256."""
         if self.signing_secret is None:
             return False
-        sig_basestring = f"v0:{timestamp}:{body.decode()}"
+        try:
+            body_str = body.decode("utf-8")
+        except UnicodeDecodeError:
+            # Non-UTF-8 body is never a valid Slack request; reject cleanly
+            # instead of crashing with an HTTP 500 (see issue #680).
+            return False
+        sig_basestring = f"v0:{timestamp}:{body_str}"
         expected = (
             "v0="
             + hmac.HMAC(

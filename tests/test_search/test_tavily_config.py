@@ -67,6 +67,7 @@ async def test_tavily_search_success(monkeypatch) -> None:
     assert results[0].title == "Tavily Title"
     assert results[0].url == "https://tavily.com"
     assert results[0].snippet == "Tavily Content"
+    assert results[0].source == "tavily"  # origin tagging (#688)
 
     # Assert outgoing request fields
     _, kwargs = mock_client.post.call_args

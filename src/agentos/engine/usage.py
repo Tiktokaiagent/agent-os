@@ -403,6 +403,7 @@ class UsageTracker:
         self._daily_spend: dict[tuple[str, str, str], float] = {}
         self._daily_spend_day = ""
         self._session_spend: dict[str, float] = {}
+        self._pending_cost: dict[str, float] = {}
         self._session_active_skill: dict[str, str] = {}
         _global_usage_tracker = self
 
@@ -568,9 +569,13 @@ class UsageTracker:
         persisted = self._session_spend.get(session_key)
         if persisted is None:
             persisted = self.get_session_db_cost(session_key)
+        # Account for spend that has been reserved but not yet charged
+        # (prevents concurrent subagent fan-out from racing past the
+        # ceiling, issue #823).
+        reserved = self._pending_cost.get(session_key, 0.0)
         mem_usage = self._sessions.get(session_key)
         in_memory = mem_usage.total_cost if mem_usage is not None else 0.0
-        return max(in_memory, persisted)
+        return max(in_memory, persisted) + reserved
 
     def get_session_scope(self, session_key: str) -> tuple[str, str]:
         meta = self._session_metadata.get(session_key)
@@ -578,6 +583,16 @@ class UsageTracker:
             meta = parse_session_key_scope(session_key)
             self._session_metadata[session_key] = meta
         return meta
+
+    def reserve_cost(self, session_key: str, amount: float = 5.0) -> None:
+        """Reserve pending cost so concurrent budget checks see it.
+
+        Prevents the check-then-act race when multiple subagents start
+        simultaneously (issue #823). Released automatically when the
+        corresponding :meth:`add` is called.
+        """
+        current = self._pending_cost.get(session_key, 0.0)
+        self._pending_cost[session_key] = current + amount
 
     def check_budget_limits(self, session_key: str, config: Any) -> tuple[bool, str | None]:
         """Evaluate every configured spend ceiling for ``session_key``.
@@ -690,6 +705,10 @@ class UsageTracker:
                 f"{label} ${spend:,.4f} has reached the ${warn:,.4f} budget warning threshold.",
             )
 
+        # Reserve minimum turn cost to prevent concurrent subagent
+        # fan-out from racing past the ceiling (see issue #823).
+        # Released when the actual spend is recorded via add().
+        self._pending_cost[session_key] = self._pending_cost.get(session_key, 0.0) + 0.001
         return False, None
 
     def add(
@@ -767,6 +786,8 @@ class UsageTracker:
                 # keeps counting from what it already spent.
                 self._session_spend[session_key] = self.get_session_db_cost(session_key)
             self._session_spend[session_key] += effective_cost
+            # Release pending reservation — actual spend now reflects it.
+            self._pending_cost.pop(session_key, None)
             self._persist_ledger(day, ledger_scopes, session_key, effective_cost)
 
         if not self._db_path:

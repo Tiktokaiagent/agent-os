@@ -371,29 +371,85 @@ def test_skill_documents_the_read_only_boundary() -> None:
 
 
 # ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# RPC URL scheme validation (#815)
+# #815: --rpc-url must be http(s), not file:// or a custom scheme
 # ---------------------------------------------------------------------------
 
 
-def test_rpc_url_rejects_file_scheme() -> None:
-    """file:// URLs are rejected to prevent local file reads."""
-    with pytest.raises(ValueError, match="unsupported.*rpc-url.*file"):
-        chain_stocks._validate_rpc_url("file:///etc/passwd")
+def test_validate_http_url_rejects_non_http_schemes() -> None:
+    """file://, ftp://, gopher://, and javascript: are all rejected."""
+    for invalid in [
+        "file:///etc/passwd",
+        "file:///c:/windows/system32/drivers/etc/hosts",
+        "ftp://rpc.example.com",
+        "gopher://example.com",
+        "javascript:alert(1)",
+    ]:
+        with pytest.raises(ValueError, match="must be http:// or https://"):
+            chain_stocks._validate_http_url(invalid)
+
+    # Empty / whitespace-only URLs are rejected too (with a clear message).
+    for empty in ["", "   "]:
+        with pytest.raises(ValueError, match="empty URL"):
+            chain_stocks._validate_http_url(empty)
+
+    assert chain_stocks._validate_http_url("http://127.0.0.1:8545") == "http://127.0.0.1:8545"
+    assert (
+        chain_stocks._validate_http_url("https://rpc.mainnet.chain.robinhood.com")
+        == "https://rpc.mainnet.chain.robinhood.com"
+    )
 
 
-def test_rpc_url_rejects_unknown_scheme() -> None:
-    """Unknown URI schemes are rejected."""
-    with pytest.raises(ValueError, match="unsupported.*rpc-url.*"):
-        chain_stocks._validate_rpc_url("ftp://rpc.example.com")
+def test_validate_http_url_rejects_missing_host() -> None:
+    """A bare scheme with no host must be rejected even if it starts with http://."""
+    with pytest.raises(ValueError, match="missing host"):
+        chain_stocks._validate_http_url("http://")
 
 
-def test_rpc_url_accepts_https() -> None:
-    """https:// RPC URLs are allowed."""
-    chain_stocks._validate_rpc_url("https://rpc.mainnet.chain.robinhood.com")
+def test_validate_http_url_accepts_valid_variants() -> None:
+    """Various valid http(s) forms are all accepted."""
+    assert chain_stocks._validate_http_url("http://example.com") == "http://example.com"
+    assert (
+        chain_stocks._validate_http_url("https://user:pass@host.com:8545")
+        == "https://user:pass@host.com:8545"
+    )
+    assert chain_stocks._validate_http_url("http://[::1]:7545") == "http://[::1]:7545"
+    assert chain_stocks._validate_http_url(chain_stocks.DEFAULT_RPC_URL)
 
 
-def test_rpc_url_accepts_http() -> None:
-    """http:// RPC URLs are allowed."""
-    chain_stocks._validate_rpc_url("http://localhost:8545")
+def test_http_json_rejects_file_scheme() -> None:
+    """_http_json validates the URL before calling urlopen."""
+    with pytest.raises(ValueError, match="must be http:// or https://"):
+        chain_stocks._http_json("file:///etc/passwd", timeout=5.0)
+
+
+def test_http_json_rejects_empty_url() -> None:
+    """_http_json rejects empty URLs."""
+    with pytest.raises(ValueError, match="empty URL"):
+        chain_stocks._http_json("", timeout=5.0)
+
+
+def test_main_rejects_invalid_rpc_url(capsys: pytest.CaptureFixture[str]) -> None:
+    """main() returns early with a JSON error when --rpc-url is file://."""
+    import json
+
+    code = chain_stocks.main(["--address",
+        "0x0000000000000000000000000000000000000000",
+        "--rpc-url", "file:///etc/passwd"])
+    assert code == 0
+    out, _ = capsys.readouterr()
+    payload = json.loads(out)
+    assert "invalid rpc-url" in payload.get("error", "")
+    assert "must be http:// or https://" in payload.get("error", "")
+
+
+def test_main_rejects_missing_host_url(capsys: pytest.CaptureFixture[str]) -> None:
+    """main() rejects a bare http://."""
+    import json
+
+    code = chain_stocks.main(["--address",
+        "0x0000000000000000000000000000000000000000",
+        "--rpc-url", "http://"])
+    assert code == 0
+    out, _ = capsys.readouterr()
+    payload = json.loads(out)
+    assert "missing host" in payload.get("error", "")

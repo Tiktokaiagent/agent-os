@@ -67,6 +67,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+-  in  copy-trade backtest no longer replaces a
+  legitimate 0.0 ROI with 0.0001, preventing wildly wrong projection numbers (#971).
 - Telegram Bot API calls now retry `ConnectTimeout` and `PoolTimeout` alongside
   `ConnectError`. All three happen before any request bytes reach Telegram — a
   DNS/TLS handshake that never completed, or a wait for a pooled connection —

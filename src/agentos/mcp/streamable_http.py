@@ -20,6 +20,7 @@ from agentos.env import trust_env as _trust_env
 from agentos.mcp.client import MCPClient
 from agentos.mcp.types import MCPServerConfig, MCPToolDef, MCPToolResult
 from agentos.paths import state_dir as default_state_dir
+from agentos.tools.ssrf import validate_http_url_for_fetch
 
 
 class MCPDependencyError(RuntimeError):
@@ -145,6 +146,7 @@ class MCPStreamableHTTPClient(MCPClient):
     async def connect(self) -> None:
         if not self.config.url:
             raise ValueError("Streamable HTTP MCP server requires a URL")
+        validate_http_url_for_fetch(self.config.url)
 
         try:
             from mcp.client.auth import OAuthClientProvider

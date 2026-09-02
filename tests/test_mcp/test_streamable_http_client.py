@@ -9,8 +9,10 @@ from typing import Any
 import pytest
 
 from agentos.mcp.discovery import create_client
+from agentos.mcp.sse import MCPSSEClient
 from agentos.mcp.streamable_http import FileOAuthStorage, MCPStreamableHTTPClient
 from agentos.mcp.types import MCPServerConfig
+from agentos.tools.types import SSRFBlockedError
 
 
 def test_factory_builds_streamable_http_client() -> None:
@@ -95,6 +97,9 @@ async def test_cancelled_connect_closes_all_partial_transport_contexts(
         async def initialize(self) -> None:
             raise asyncio.CancelledError
 
+    monkeypatch.setattr(
+        "agentos.mcp.streamable_http.validate_http_url_for_fetch", lambda _url: None
+    )
     monkeypatch.setattr("agentos.mcp.streamable_http.httpx.AsyncClient", fake_http_client)
     monkeypatch.setattr(transport_module, "streamable_http_client", fake_transport)
     monkeypatch.setattr(session_module, "ClientSession", lambda *_args, **_kwargs: FakeSession())
@@ -110,3 +115,31 @@ async def test_cancelled_connect_closes_all_partial_transport_contexts(
         await client.connect()
 
     assert closed == ["session", "transport", "http"]
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_connect_rejects_cloud_metadata_ip() -> None:
+    """Regression: MCP Streamable HTTP must reject cloud metadata IPs."""
+    client = MCPStreamableHTTPClient(
+        MCPServerConfig(
+            name="test",
+            transport="streamable_http",
+            url="http://169.254.169.254/latest/meta-data/",
+        )
+    )
+    with pytest.raises(SSRFBlockedError):
+        await client.connect()
+
+
+@pytest.mark.asyncio
+async def test_sse_connect_rejects_cloud_metadata_ip() -> None:
+    """Regression: MCP SSE must reject cloud metadata IPs."""
+    client = MCPSSEClient(
+        MCPServerConfig(
+            name="test",
+            transport="sse",
+            url="http://169.254.169.254/latest/meta-data/",
+        )
+    )
+    with pytest.raises(SSRFBlockedError):
+        await client.connect()

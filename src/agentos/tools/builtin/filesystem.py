@@ -923,7 +923,10 @@ async def list_dir(path: str) -> str:
             if entry.is_dir():
                 dirs.append(f"[dir]  {entry.name}/")
             else:
-                size = entry.stat().st_size
+                try:
+                    size = entry.stat().st_size
+                except (OSError, FileNotFoundError):
+                    size = entry.lstat().st_size
                 files.append(f"[file] {entry.name} ({size} bytes)")
         return dirs + files + blocked_entries
 

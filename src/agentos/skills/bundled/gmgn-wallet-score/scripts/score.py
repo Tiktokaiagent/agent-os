@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
+"""Score a GMGN wallet's copy-tradeability."""
 import json, math, subprocess, sys
+
+if len(sys.argv) < 3:
+    name = sys.argv[0]
+    print(f"Usage: {name} <wallet_address> <chain> [lang] [latency_s] [slippage_pct] [gas_usd] [sample]", file=sys.stderr)
+    print(f"  e.g. {name} 0x... ethereum", file=sys.stderr)
+    print(f"       {name} 0x... sol zh 2.0 0.03 0.15 100", file=sys.stderr)
+    sys.exit(2)
 
 WALLET       = sys.argv[1]
 CHAIN        = sys.argv[2]

@@ -150,7 +150,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
 
@@ -289,7 +289,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
 
@@ -387,7 +387,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
 

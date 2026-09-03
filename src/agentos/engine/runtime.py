@@ -4634,7 +4634,40 @@ class TurnRunner:
         # Apply routed model back to cloned selector (local, not shared)
         if turn.model and cloned_selector is not None:
             cloned_selector.override_model(turn.model)
-            provider = cloned_selector.resolve()
+            # Inject tier alternatives as fallback models so
+            # _SelectorFallbackProvider can switch tiers on timeout/failure.
+            if router_cfg is not None and getattr(router_cfg, "enabled", False):
+                tiers = getattr(router_cfg, "tiers", None)
+                if isinstance(tiers, dict):
+                    from agentos.provider.selector import ProviderConfig
+                    primary_model = turn.model
+                    fallback_cfgs: list[ProviderConfig] = []
+                    for tier_name, tier_cfg in tiers.items():
+                        if not isinstance(tier_cfg, dict):
+                            continue
+                        tier_model = str(tier_cfg.get("model") or "").strip()
+                        if tier_model and tier_model != primary_model:
+                            cp = cloned_selector.current_config
+                            tier_provider = str(tier_cfg.get("provider") or "").strip() or getattr(cp, "provider", "")  # noqa: E501
+                            fallback_cfgs.append(ProviderConfig(
+                                provider=tier_provider,
+                                model=tier_model,
+                                api_key=(
+                                    str(tier_cfg.get("api_key") or "").strip()
+                                    or getattr(cp, "api_key", "")
+                                ),
+                                base_url=(
+                                    str(tier_cfg.get("base_url") or "").strip()
+                                    or getattr(cp, "base_url", "")
+                                ),
+                            ))
+                    if fallback_cfgs:
+                        if hasattr(cloned_selector, "_chain") and cloned_selector._chain:
+                            primary = cloned_selector._chain[0]
+                            cloned_selector._chain = [
+                                primary,
+                                *fallback_cfgs,
+                            ]
 
         return turn, provider
 

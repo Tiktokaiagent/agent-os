@@ -432,3 +432,128 @@ async def test_multiple_messages_then_search(
     # No rescan
     await sync_manager_no_indexer.sync(reason="search")
     assert spy.scanned == 1
+@pytest.mark.asyncio
+async def test_delta_reset_only_before_scan(
+    sync_manager_no_indexer: MemorySyncManager,
+) -> None:
+    """Delta is reset *before* the scan, not after, so concurrent
+    notify_message during a long scan does not get silently dropped."""
+    spy = _ScanSpy(sync_manager_no_indexer)
+    sync_manager_no_indexer._dirty = False
+
+    sync_manager_no_indexer.notify_message(byte_count=100)
+
+    # Start sync — delta consumed before scan runs
+    await sync_manager_no_indexer.sync(reason="search")
+
+    # Delta cleared even though scan happened
+    assert sync_manager_no_indexer._delta.has_pending() is False
+
+    # New message during scan should create a NEW pending delta
+    sync_manager_no_indexer.notify_message(byte_count=200)
+    await sync_manager_no_indexer.sync(reason="search")
+
+    assert spy.scanned == 2
+
+
+@pytest.mark.asyncio
+async def test_no_memory_dir_still_creates_manager(
+    workspace: Path, store: _FakeStore
+) -> None:
+    """Sync manager with no memory directory still works."""
+    no_mem = workspace / "no-memory"
+    no_mem.mkdir()
+    manager = MemorySyncManager(
+        store=store,
+        workspace_dir=workspace,
+        memory_dir=no_mem / "nonexistent",
+        session_indexer=None,
+    )
+    spy = _ScanSpy(manager)
+    manager._dirty = False
+
+    manager.notify_message(byte_count=100)
+    await manager.sync(reason="search")
+
+    # Scan runs (even with empty dir, no crash)
+    assert spy.scanned == 1
+
+    # Delta consumed
+    assert manager._delta.has_pending() is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_search_no_rescan_after(
+    sync_manager_no_indexer: MemorySyncManager,
+) -> None:
+    """If scan is cancelled and sync is retried, the second search
+    re-uses the consumed delta — no double scan."""
+    spy = _ScanSpy(sync_manager_no_indexer)
+    sync_manager_no_indexer._dirty = False
+
+    sync_manager_no_indexer.notify_message(byte_count=100)
+    # First call cancels mid-scan (simulated by exception)
+    # but delta was already consumed
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 1
+
+    # Retry search — delta already consumed, no new scan
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_counts_match_delta_consumed(
+    sync_manager_no_indexer: MemorySyncManager,
+    sync_manager_with_indexer: MemorySyncManager,
+) -> None:
+    """Both disabled and enabled indexer paths consume delta."""
+    for manager in (sync_manager_no_indexer, sync_manager_with_indexer):
+        manager._dirty = False
+        manager.notify_message(byte_count=100)
+        await manager.sync(reason="search")
+        assert manager._delta.has_pending() is False
+
+
+@pytest.mark.asyncio
+async def test_repeated_small_messages_exactly_at_threshold(
+    sync_manager_no_indexer: MemorySyncManager,
+) -> None:
+    """Messages exactly filling the threshold cause one scan."""
+    spy = _ScanSpy(sync_manager_no_indexer)
+    sync_manager_no_indexer._dirty = False
+
+    # Add bytes up to exactly threshold
+    threshold = sync_manager_no_indexer._delta.delta_bytes_threshold
+    sync_manager_no_indexer.notify_message(byte_count=threshold)
+    assert sync_manager_no_indexer._delta.should_sync() is True
+
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 1
+    assert sync_manager_no_indexer._delta.has_pending() is False
+
+    # Same delta won't rescan
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_recreated_during_session(
+    sync_manager_no_indexer: MemorySyncManager,
+    workspace: Path,
+) -> None:
+    """Workspace re-created between syncs (simulating volume mount)."""
+    spy = _ScanSpy(sync_manager_no_indexer)
+    sync_manager_no_indexer._dirty = False
+
+    sync_manager_no_indexer.notify_message(byte_count=100)
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 1
+
+    # "Re-create" workspace
+    (workspace / "new_file.md").write_text("# New\n", encoding="utf-8")
+    sync_manager_no_indexer.mark_dirty()
+
+    # Dirty state overrides delta — must scan
+    await sync_manager_no_indexer.sync(reason="search")
+    assert spy.scanned == 2

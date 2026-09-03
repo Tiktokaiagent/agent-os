@@ -96,6 +96,7 @@ class OtlpTraceSink(TraceSink):
         self._queue_lock = threading.Lock()
         self._flush_lock = asyncio.Lock()
         self._flush_task: asyncio.Task[None] | None = None
+        self._adhoc_flush_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     def start(self) -> None:
@@ -146,9 +147,14 @@ class OtlpTraceSink(TraceSink):
             try:
                 loop = asyncio.get_running_loop()
                 if loop.is_running():
-                    loop.create_task(self.flush())
+                    task = loop.create_task(self.flush())
+                    self._adhoc_flush_tasks.add(task)
+                    task.add_done_callback(self._discard_adhoc_task)
             except RuntimeError:
                 pass
+
+    def _discard_adhoc_task(self, task: asyncio.Task) -> None:
+        self._adhoc_flush_tasks.discard(task)
 
     def build_export_payload(self, events: list[TraceEvent]) -> dict[str, Any]:
         """Transform AgentOS TraceEvents into OTLP JSON ExportTraceServiceRequest."""
@@ -283,4 +289,10 @@ class OtlpTraceSink(TraceSink):
             except Exception:
                 pass
             self._flush_task = None
+        # Cancel and collect pending ad-hoc flush tasks.
+        for task in self._adhoc_flush_tasks:
+            task.cancel()
+        if self._adhoc_flush_tasks:
+            await asyncio.gather(*self._adhoc_flush_tasks, return_exceptions=True)
+            self._adhoc_flush_tasks.clear()
         await self.flush()

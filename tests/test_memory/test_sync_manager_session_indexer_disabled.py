@@ -15,12 +15,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import PropertyMock
 
 import pytest
 
 from agentos.memory.sync_manager import MemorySyncManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -267,7 +265,7 @@ async def test_no_indexer_large_message_above_threshold(
     sync_manager_no_indexer: MemorySyncManager,
 ) -> None:
     """A message exceeding the delta byte threshold still consumes delta."""
-    spy = _ScanSpy(sync_manager_no_indexer)
+    _ = _ScanSpy(sync_manager_no_indexer)  # noqa: F841 - installs spy patch
     sync_manager_no_indexer._dirty = False
 
     # Message above default 100KB threshold

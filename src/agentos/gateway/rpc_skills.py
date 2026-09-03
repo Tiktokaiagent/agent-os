@@ -625,7 +625,15 @@ async def _handle_skills_update(params: dict | None, ctx: RpcContext) -> dict[st
     if any(r.success for r in results):
         _invalidate_loader(ctx)
     return {
-        "results": [{"success": r.success, "name": r.name, "message": r.message} for r in results]
+        "results": [
+            {
+                "success": r.success,
+                "name": r.name,
+                "message": r.message,
+                **({"scan_verdict": r.scan.verdict, "scan_findings": [f.__dict__ for f in r.scan.findings]} if r.scan else {}),
+            }
+            for r in results
+        ]
     }
 
 

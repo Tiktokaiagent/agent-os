@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -693,7 +694,10 @@ class TelegramChannel:
         secret = self.config.webhook_secret_token
         if not secret:
             return Response(status_code=503)
-        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != secret:
+        if not hmac.compare_digest(
+            request.headers.get("X-Telegram-Bot-Api-Secret-Token", ""),
+            secret,
+        ):
             return Response(status_code=401)
         try:
             update = await request.json()

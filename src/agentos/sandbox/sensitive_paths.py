@@ -315,7 +315,10 @@ def _expand_env_vars(text: str) -> str:
         return text
     try:
         expanded = os.path.expandvars(text)
-        return expanded if expanded != text else text
+        if expanded != text:
+            # Normalize path separators (C:\Users\foo/.ssh -> C:\Users\foo\.ssh)
+            expanded = str(Path(expanded))
+        return expanded
     except (ValueError, TypeError):
         return text
 

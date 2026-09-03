@@ -19,6 +19,20 @@ class DebounceCoordinator(Protocol):
 
 
 class _DefaultDebounceCoordinator:
+    """Coalesces rapid repeating messages per session_key within a debounce window.
+
+    The buffer per session_key is capped to prevent a memory DoS from a
+    paired channel user who fires a large number of messages within the
+    window. Once the cap is reached, the oldest buffered messages are
+    dropped (FIFO eviction) so the debounce stays responsive without
+    unbounded allocation.
+    """
+
+    # Max buffered messages per session_key to guard against unbounded
+    # memory growth (issue #796). After this limit, oldest messages are
+    # dropped.
+    _MAX_BUFFER: int = 100
+
     def __init__(self) -> None:
         self._pending: dict[str, Any] = {}
         self._lock = asyncio.Lock()
@@ -27,6 +41,10 @@ class _DefaultDebounceCoordinator:
         async with self._lock:
             if state := self._pending.get(session_key):
                 state.buffer.append(message)
+                while len(state.buffer) > self._MAX_BUFFER:
+                    # FIFO eviction — drop the oldest message so we stay
+                    # within the cap instead of bowling over memory.
+                    state.buffer.pop(0)
                 return
             task = asyncio.create_task(self._fire(session_key, window_s), name=f"channel-debounce:{session_key}")
             self._pending[session_key] = SimpleNamespace(buffer=[message], on_fire=on_fire, task=task)

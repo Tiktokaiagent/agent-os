@@ -105,9 +105,10 @@ _DOTENV_LITERAL_RE = re.compile(
 
 
 def _expand(path: str) -> str:
-    """Expand ``~`` and resolve to absolute without requiring existence."""
+    """Expand ``~`` and ``$VAR`` / ``${VAR}``, then resolve to absolute."""
     try:
-        return str(Path(path).expanduser().resolve(strict=False))
+        expanded = os.path.expandvars(path)
+        return str(Path(expanded).expanduser().resolve(strict=False))
     except (OSError, RuntimeError):
         return path
 
@@ -191,6 +192,9 @@ def is_sensitive_path(path: str) -> str | None:
         return None
     if not path:
         return None
+    # Expand ``$HOME``, ``${HOME}``, ``$USER`` etc. so env-var-obscured
+    # paths (``$HOME/.ssh/config``) are detected.
+    path = _expand_env_vars(path)
     candidates = _comparison_path_candidates(path)
     for expanded in candidates:
         if (
@@ -271,6 +275,51 @@ def _sensitive_leaf_marker(path: str) -> str | None:
     return None
 
 
+def _restore_env_var_shape(raw: str, candidate: str) -> str:
+    """Restore env-var shape stripped by ``_TOKEN_EDGE_CHARS``.
+
+    ``_TOKEN_EDGE_CHARS`` includes ``$``, ``{``, ``}`` so tokens like
+    ``$HOME/.ssh/config`` become ``HOME/.ssh/config`` and
+    ``${HOME}/.aws/creds`` become ``HOME}/.aws/creds``. Reconstruct the
+    env-var prefix so ``_expand_env_vars`` can resolve it.
+    """
+    if not raw or not candidate:
+        return candidate
+    # ``${X}`` form: raw starts with ``${"""
+    if raw.startswith("${"):
+        close = raw.find("}")
+        if close != -1:
+            var_name = raw[2:close]  # e.g. HOME
+            prefix = "${" + var_name + "}"
+            # After stripping ``$", "{", ``}``, candidate might be:
+            #   "HOME}/.aws/creds"  (only ``$`` and ``{`` stripped, ``}``
+            #                         at position 4 is the original close)
+            # We need to reconstruct to ``${HOME}/.aws/creds``.
+            # Check if candidate starts with ``var_name}/";``  the ``}"
+            # was the closing brace, not a stripped char.
+            if candidate.startswith(var_name + "}/"):
+                return prefix + candidate[len(var_name) + 1:]
+            # If candidate starts with ``var_name/", the ``}" was stripped.
+            if candidate.startswith(var_name + "/"):
+                return prefix + candidate[len(var_name):]
+    # ``$X`` form: raw starts with ``$`` but not ``${"""
+    if raw.startswith("$") and not candidate.startswith("$"):
+        return "$" + candidate
+    return candidate
+
+
+def _expand_env_vars(text: str) -> str:
+    """Expand ``$VAR`` and ``${VAR}`` references so the path scanner can
+    match env-var-obscured sensitive paths like ``$HOME/.ssh/config``."""
+    if "$" not in text:
+        return text
+    try:
+        expanded = os.path.expandvars(text)
+        return expanded if expanded != text else text
+    except (ValueError, TypeError):
+        return text
+
+
 def sensitive_path_marker(
     path: str,
     *,
@@ -285,6 +334,9 @@ def sensitive_path_marker(
     """
 
     text = str(path).strip()
+    # Expand ``$HOME``, ``${HOME}``, ``$USER`` etc. so env-var-obscured
+    # paths do not silently bypass the sensitive-path denylist.
+    text = _expand_env_vars(text)
     raw = Path(text).expanduser()
     if (
         text
@@ -294,13 +346,13 @@ def sensitive_path_marker(
     ):
         return _sensitive_leaf_marker(text)
 
-    marker = is_sensitive_path(path)
+    marker = is_sensitive_path(text)
     if marker is None:
         return None
-    if _workspace_contains(path, workspace) and _workspace_nested_under_marker(
+    if _workspace_contains(text, workspace) and _workspace_nested_under_marker(
         workspace, marker
     ):
-        leaf_marker = _sensitive_leaf_marker(path)
+        leaf_marker = _sensitive_leaf_marker(text)
         return leaf_marker
     return marker
 
@@ -344,6 +396,7 @@ def sensitive_path_in_text(
         candidate = raw.strip(_TOKEN_EDGE_CHARS)
         if not candidate:
             continue
+        candidate = _restore_env_var_shape(raw, candidate)
         marker = sensitive_path_marker(candidate, workspace=workspace)
         if marker is not None:
             return marker
@@ -354,6 +407,7 @@ def sensitive_path_in_text(
             continue
         if start >= 2 and text[max(0, start - 3) : start] == "://":
             continue
+        candidate = _restore_env_var_shape(raw, candidate)
         marker = sensitive_path_marker(candidate, workspace=workspace)
         if marker is not None:
             return marker

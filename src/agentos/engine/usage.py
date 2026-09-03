@@ -20,6 +20,20 @@ from .pricing import calculate_cost_usd, lookup_price
 log = structlog.get_logger(__name__)
 
 
+@dataclass
+class _BudgetSlot:
+    """One admitted-but-unspent turn's reservation against budget ceilings."""
+
+    session_key: str
+    amount: float
+    created_at: float
+    ttl_seconds: float = 30.0
+
+    @property
+    def expired(self) -> bool:
+        return time.monotonic() - self.created_at > self.ttl_seconds
+
+
 def parse_session_key_scope(session_key: str) -> tuple[str, str]:
     """Parse (agent_id, channel) from session_key."""
     key = str(session_key or "").strip()
@@ -404,6 +418,7 @@ class UsageTracker:
         self._daily_spend_day = ""
         self._session_spend: dict[str, float] = {}
         self._session_active_skill: dict[str, str] = {}
+        self._budget_slots: list[_BudgetSlot] = []
         _global_usage_tracker = self
 
         if self._db_path:
@@ -520,22 +535,25 @@ class UsageTracker:
         """
         mirror = self._daily_spend.get((day, scope_kind, scope_id), 0.0)
         if not self._ledger_db_path:
-            return mirror
-        conn = self._connect(self._ledger_db_path)
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT cost_usd FROM spend_ledger "
-                "WHERE day = ? AND scope_kind = ? AND scope_id = ?",
-                (day, scope_kind, scope_id),
-            )
-            row = cursor.fetchone()
-            return max(mirror, float(row[0])) if row else mirror
-        except Exception as e:
-            log.warning("usage_tracker.ledger_query_failed", error=str(e))
-            return mirror
-        finally:
-            conn.close()
+            base = mirror
+        else:
+            conn = self._connect(self._ledger_db_path)
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT cost_usd FROM spend_ledger "
+                    "WHERE day = ? AND scope_kind = ? AND scope_id = ?",
+                    (day, scope_kind, scope_id),
+                )
+                row = cursor.fetchone()
+                base = max(mirror, float(row[0])) if row else mirror
+            except Exception as e:
+                log.warning("usage_tracker.ledger_query_failed", error=str(e))
+                base = mirror
+            finally:
+                conn.close()
+        reserved = self._get_reserved_for_scope(day, scope_kind, scope_id)
+        return base + reserved
 
     def get_session_db_cost(self, session_key: str) -> float:
         """Return the persisted lifetime cost recorded for one session."""
@@ -570,7 +588,9 @@ class UsageTracker:
             persisted = self.get_session_db_cost(session_key)
         mem_usage = self._sessions.get(session_key)
         in_memory = mem_usage.total_cost if mem_usage is not None else 0.0
-        return max(in_memory, persisted)
+        base = max(in_memory, persisted)
+        reserved = self._get_reserved_for_session(session_key)
+        return base + reserved
 
     def get_session_scope(self, session_key: str) -> tuple[str, str]:
         meta = self._session_metadata.get(session_key)
@@ -578,6 +598,37 @@ class UsageTracker:
             meta = parse_session_key_scope(session_key)
             self._session_metadata[session_key] = meta
         return meta
+
+    # ── budget reservation helpers ──────────────────────────────────────
+
+    def _purge_expired_slots(self) -> None:
+        """Remove budget slots whose TTL has elapsed."""
+        self._budget_slots[:] = [s for s in self._budget_slots if not s.expired]
+
+    def _get_reserved_for_session(self, session_key: str) -> float:
+        """Sum of all active reservations for one session."""
+        self._purge_expired_slots()
+        total = 0.0
+        for slot in self._budget_slots:
+            if not slot.expired and slot.session_key == session_key:
+                total += slot.amount
+        return total
+
+    def _get_reserved_for_scope(self, day: str, scope_kind: str, scope_id: str) -> float:
+        """Sum of reservations whose session maps to a daily scope."""
+        self._purge_expired_slots()
+        total = 0.0
+        for slot in self._budget_slots:
+            if slot.expired:
+                continue
+            sk_agent, sk_channel = self.get_session_scope(slot.session_key)
+            if scope_kind == "gateway":
+                total += slot.amount
+            elif scope_kind == "agent" and sk_agent == scope_id:
+                total += slot.amount
+            elif scope_kind == "channel" and sk_channel == scope_id:
+                total += slot.amount
+        return total
 
     def check_budget_limits(self, session_key: str, config: Any) -> tuple[bool, str | None]:
         """Evaluate every configured spend ceiling for ``session_key``.
@@ -690,6 +741,19 @@ class UsageTracker:
                 f"{label} ${spend:,.4f} has reached the ${warn:,.4f} budget warning threshold.",
             )
 
+        # All ceilings pass — reserve headroom so concurrent fan-out turns
+        # see this admitted turn's budget.
+        reservation_amount = getattr(config, "max_turn_billed_cost_usd", None)
+        if reservation_amount is None or reservation_amount <= 0:
+            reservation_amount = 0.001
+        self._purge_expired_slots()
+        self._budget_slots.append(
+            _BudgetSlot(
+                session_key=session_key,
+                amount=reservation_amount,
+                created_at=time.monotonic(),
+            )
+        )
         return False, None
 
     def add(
@@ -768,6 +832,13 @@ class UsageTracker:
                 self._session_spend[session_key] = self.get_session_db_cost(session_key)
             self._session_spend[session_key] += effective_cost
             self._persist_ledger(day, ledger_scopes, session_key, effective_cost)
+
+        # Release one budget slot for this session (FIFO — pop oldest).
+        self._purge_expired_slots()
+        for i, slot in enumerate(self._budget_slots):
+            if slot.session_key == session_key:
+                self._budget_slots.pop(i)
+                break
 
         if not self._db_path:
             return

@@ -445,3 +445,127 @@ async def test_a_broken_guard_does_not_stop_the_turn() -> None:
     events = [event async for event in agent.run_turn("go")]
 
     assert not any(getattr(event, "code", "") == "budget_exceeded" for event in events)
+
+
+# ── Budget reservations (concurrent fan-out protection) ────────────────
+
+
+def test_check_budget_limits_creates_a_reservation() -> None:
+    """check_budget_limits must reserve headroom when ceilings pass."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        max_turn_billed_cost_usd=1.0,
+        session_limit=10.0,
+    )
+    assert len(tracker._budget_slots) == 0
+    tracker.check_budget_limits(SESSION, config)
+    assert len(tracker._budget_slots) == 1
+    assert tracker._budget_slots[0].session_key == SESSION
+    assert tracker._budget_slots[0].amount == 1.0
+
+
+def test_add_releases_one_reservation_per_call() -> None:
+    """add() must release exactly one slot per call (FIFO), not all."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        max_turn_billed_cost_usd=1.0,
+        session_limit=10.0,
+    )
+
+    tracker.check_budget_limits("session:a:1", config)
+    tracker.check_budget_limits("session:a:2", config)
+    tracker.check_budget_limits("session:a:3", config)
+    assert len(tracker._budget_slots) == 3
+
+    tracker.add("session:a:1", input_tokens=10, output_tokens=1, model_id="t", billed_cost=0.5)
+    assert len(tracker._budget_slots) == 2
+
+    tracker.add("session:a:2", input_tokens=10, output_tokens=1, model_id="t", billed_cost=0.5)
+    assert len(tracker._budget_slots) == 1
+
+    tracker.add("session:a:3", input_tokens=10, output_tokens=1, model_id="t", billed_cost=0.5)
+    assert len(tracker._budget_slots) == 0
+
+
+def test_reservation_prevents_concurrent_fan_out_overshoot() -> None:
+    """5 concurrent turns with $9.90/$10 spent must admit exactly 1."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        max_turn_billed_cost_usd=0.10,
+        session_limit=10.00,
+    )
+
+    _spend(tracker, SESSION, 9.90)
+
+    admit_count = 0
+    for _ in range(5):
+        hard_stop, _ = tracker.check_budget_limits(SESSION, config)
+        if not hard_stop:
+            admit_count += 1
+
+    assert admit_count == 1, f"Expected 1 admission, got {admit_count}"
+
+    tracker.add(SESSION, input_tokens=10, output_tokens=1, model_id="t", billed_cost=0.05)
+    assert len(tracker._budget_slots) == 0
+
+
+def test_ttl_prevents_eternal_leak_from_broken_turns() -> None:
+    """Slots must expire so cancelled turns do not leak."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        max_turn_billed_cost_usd=1.0,
+        session_limit=10.0,
+    )
+
+    tracker.check_budget_limits(SESSION, config)
+    assert len(tracker._budget_slots) == 1
+
+    tracker._budget_slots[0].created_at = 0.0  # expire
+
+    hs, _ = tracker.check_budget_limits(SESSION, config)
+    assert hs is False  # should admit, old slot purged
+
+
+def test_reservation_default_amount_works_without_max_turn_cost() -> None:
+    """When max_turn_billed_cost_usd is not set, fall back to 0.001."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        session_limit=10.0,
+    )
+
+    tracker.check_budget_limits(SESSION, config)
+    assert len(tracker._budget_slots) == 1
+    assert tracker._budget_slots[0].amount == 0.001
+
+
+def test_reservations_count_across_all_daily_scopes() -> None:
+    """Reservations inflate daily/agent/channel spend too."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(
+        enabled=True,
+        max_turn_billed_cost_usd=2.0,
+        daily_limit=5.0,
+    )
+
+    _spend(tracker, SESSION, 4.0)
+
+    hs, _ = tracker.check_budget_limits(SESSION, config)
+    assert hs is False, "First turn passes: $4 < $5"
+
+    hs, _ = tracker.check_budget_limits(SESSION, config)
+    assert hs is True, "Second turn blocked: $4 + $2 reserve = $6 > $5"
+
+
+def test_reservation_does_not_break_empty_budgets() -> None:
+    """No configured budgets must still work."""
+    tracker = UsageTracker()
+    config = SimpleNamespace(enabled=True)
+
+    hs, _ = tracker.check_budget_limits(SESSION, config)
+    assert hs is False
+    assert len(tracker._budget_slots) == 1

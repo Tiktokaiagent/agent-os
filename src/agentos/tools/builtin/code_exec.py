@@ -90,7 +90,7 @@ def _check_code_destructive(code: str) -> str | None:
     # First: regex-based scan for obvious patterns (fast path)
     for pattern, label in _DESTRUCTIVE_PY_PATTERNS:
         if re.search(pattern, code):
-            return f"destructive Python operation detected: {label}"
+            return f"blocked: {label}"
 
     # Second: AST analysis for obfuscated bypasses
     try:
@@ -114,26 +114,29 @@ def _check_code_destructive(code: str) -> str | None:
             if node.module in _DESTRUCTIVE_IMPORT_MODULES:
                 module_imports.add(node.module)
                 for alias in node.names:
-                    if alias.name in _DESTRUCTIVE_MODULE_ATTRS.get(node.module, frozenset()):
-                        return f"destructive Python operation detected: {node.module}.{alias.name}()"
+                    attrs = _DESTRUCTIVE_MODULE_ATTRS.get(node.module, frozenset())
+                    if alias.name in attrs:
+                        return f"blocked: {node.module}.{alias.name}()"
                     # Wildcard imports from destructive modules
                     if alias.name == "*":
-                        return f"destructive Python operation detected: from {node.module} import * (allows all {node.module} functions)"
+                        return f"blocked: from {node.module} import *"
                     alias_map[alias.asname or alias.name] = (node.module, alias.name)
             elif node.module in ["importlib", "builtins"]:
                 for alias in node.names:
                     alias_map[alias.asname or alias.name] = (node.module, alias.name)
 
         # Check attribute access chains: os.remove, shutil.rmtree, etc.
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and isinstance(node.ctx, ast.Load):
-            module = node.value.id
-            resolved = imported_names.get(module, module)
-            attr = node.attr
-            if resolved in _DESTRUCTIVE_MODULE_ATTRS and attr in (_DESTRUCTIVE_MODULE_ATTRS[resolved]):
-                return f"destructive Python operation detected: {module}.{attr}()"
-            # Path().unlink/rmdir — check attribute name
-            if attr in ("unlink", "rmdir"):
-                return f"destructive Python operation detected: Path.{attr}()"
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if isinstance(node.ctx, ast.Load):
+                module = node.value.id
+                resolved = imported_names.get(module, module)
+                attr = node.attr
+                if resolved in _DESTRUCTIVE_MODULE_ATTRS:
+                    d_attrs = _DESTRUCTIVE_MODULE_ATTRS[resolved]
+                    if attr in d_attrs:
+                        return f"blocked: {module}.{attr}()"
+                if attr in ("unlink", "rmdir"):
+                    return f"blocked: Path.{attr}()"
 
         # Check getattr() with destructive string args
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -141,13 +144,14 @@ def _check_code_destructive(code: str) -> str | None:
                 attr_arg = node.args[1]
                 if isinstance(attr_arg, ast.Constant) and isinstance(attr_arg.value, str):
                     if attr_arg.value in _DESTRUCTIVE_FUNCTIONS:
-                        return f"destructive Python operation detected: getattr(..., {attr_arg.value})()"
+                        v = attr_arg.value
+                        return f"blocked: getattr(..., {v})()"
                 # Concatenated strings: "rem" + "ove" -> check all parts
                 if isinstance(attr_arg, ast.BinOp) and isinstance(attr_arg.op, ast.Add):
                     parts = _collect_add_parts(attr_arg)
                     reconstructed = "".join(p for p in parts if isinstance(p, str))
                     if reconstructed in _DESTRUCTIVE_FUNCTIONS:
-                        return f"destructive Python operation detected: getattr(..., reconstructed destructive name)"
+                        return "blocked: getattr(..., reconstructed destructive name)"
 
         # Check __import__().attr()
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
@@ -159,19 +163,25 @@ def _check_code_destructive(code: str) -> str | None:
                     if isinstance(mod_arg, ast.Constant) and isinstance(mod_arg.value, str):
                         if mod_arg.value in _DESTRUCTIVE_MODULE_ATTRS:
                             attr = node.func.attr
-                            if attr in _DESTRUCTIVE_MODULE_ATTRS[mod_arg.value]:
-                                return f"destructive Python operation detected: __import__('{mod_arg.value}').{attr}()"
+                            d_attrs = _DESTRUCTIVE_MODULE_ATTRS[mod_arg.value]
+                            if attr in d_attrs:
+                                mv = mod_arg.value
+                                return f"blocked: __import__('{mv}').{attr}()"
             # importlib.import_module("os").remove()
             elif isinstance(inner_call, ast.Call) and isinstance(inner_call.func, ast.Attribute):
-                if (isinstance(inner_call.func.value, ast.Name)
+                is_import_lib = (
+                    isinstance(inner_call.func.value, ast.Name)
                     and inner_call.func.value.id in ["importlib", "__import__"]
-                    and inner_call.func.attr == "import_module"):
+                    and inner_call.func.attr == "import_module"
+                )
+                if is_import_lib:
                     for a in inner_call.args:
                         if isinstance(a, ast.Constant) and isinstance(a.value, str):
                             if a.value in _DESTRUCTIVE_MODULE_ATTRS:
                                 attr = node.func.attr
-                                if attr in _DESTRUCTIVE_MODULE_ATTRS[a.value]:
-                                    return f"destructive Python operation detected: importlib.import_module('{a.value}').{attr}()"
+                                d_attrs = _DESTRUCTIVE_MODULE_ATTRS[a.value]
+                                if attr in d_attrs:
+                                    return f"blocked: importlib.import_module('{a.value}').{attr}()"
 
         # Check exec/eval with destructive string literals
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -181,15 +191,18 @@ def _check_code_destructive(code: str) -> str | None:
                     # Scan the embedded string for destructive markers
                     for marker in _DESTRUCTIVE_STRING_MARKERS:
                         if marker in code_arg.value.lower():
-                            return f"destructive Python operation detected: {node.func.id}() with destructive content"
+                            fn = node.func.id
+                            return f"blocked: {fn}() with destructive content"
 
         # Check alias_map: from os import remove as rm; rm("/tmp/x")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             func_name = node.func.id
             if func_name in alias_map:
                 module_name, attr = alias_map[func_name]
-                if module_name in _DESTRUCTIVE_MODULE_ATTRS and attr in _DESTRUCTIVE_MODULE_ATTRS[module_name]:
-                    return f"destructive Python operation detected: {module_name}.{attr}() (via import alias)"
+                if module_name in _DESTRUCTIVE_MODULE_ATTRS:
+                    d_attrs = _DESTRUCTIVE_MODULE_ATTRS[module_name]
+                    if attr in d_attrs:
+                        return f"blocked: {module_name}.{attr}() (via import alias)"
                 if module_name == "builtins" and attr == "getattr":
                     # from builtins import getattr is the same as getattr
                     pass
@@ -204,8 +217,10 @@ def _check_code_destructive(code: str) -> str | None:
                     imported_module = imported_names[obj_name]
                     if imported_module in _DESTRUCTIVE_MODULE_ATTRS:
                         if isinstance(attr_arg, ast.Constant) and isinstance(attr_arg.value, str):
-                            if attr_arg.value in _DESTRUCTIVE_MODULE_ATTRS[imported_module]:
-                                return f"destructive Python operation detected: getattr({imported_module}, ...) via alias"
+                            d_attrs = _DESTRUCTIVE_MODULE_ATTRS[imported_module]
+                            if attr_arg.value in d_attrs:
+                                im = imported_module
+                                return f"blocked: getattr({im}, ...) via alias"
 
         # Check subprocess/__import__ calls targeting destructive modules
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -213,7 +228,8 @@ def _check_code_destructive(code: str) -> str | None:
                 mod_arg = node.args[0]
                 if isinstance(mod_arg, ast.Constant) and isinstance(mod_arg.value, str):
                     if mod_arg.value in _DESTRUCTIVE_IMPORT_MODULES:
-                        return f"destructive Python operation detected: dynamic __import__('{mod_arg.value}')"
+                        mv = mod_arg.value
+                        return f"blocked: dynamic __import__('{mv}')"
 
     return None
 

@@ -17,6 +17,13 @@ if TYPE_CHECKING:
 
 DEFAULT_MAX_SPAWN_DEPTH = MAX_SPAWN_DEPTH
 
+# Maximum archived handles before oldest are evicted.
+_MAX_ARCHIVED = 50
+
+# Time-to-live for archived handles (seconds).
+# Handles whose completed_at is older than this are auto-evicted.
+_ARCHIVED_TTL_SECONDS = 300.0
+
 
 @dataclass
 class SubagentSpec:
@@ -47,12 +54,25 @@ class SubagentHandle:
 
 
 class SubagentRegistry:
-    """Tracks active subagent runs for a session."""
+    """Tracks active subagent runs for a session.
 
-    def __init__(self) -> None:
+    ``_archived`` is bounded by ``_ARCHIVED_TTL_SECONDS`` and ``_MAX_ARCHIVED``
+    to prevent unbounded memory growth on long-running sessions.  Archived
+    handles past the TTL are evicted lazily on ``archive()``,
+    ``get_archived()``, and ``purge_archived()``.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_archived: int = _MAX_ARCHIVED,
+        archived_ttl: float = _ARCHIVED_TTL_SECONDS,
+    ) -> None:
         self._runs: dict[str, SubagentHandle] = {}
         self._archived: dict[str, SubagentHandle] = {}
         self._parent_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._max_archived = max_archived
+        self._archived_ttl = archived_ttl
 
     def register(
         self, handle: SubagentHandle, parent_task: asyncio.Task[Any] | None = None
@@ -80,17 +100,66 @@ class SubagentRegistry:
         handle.completed_at = time.monotonic()
         return True
 
+    @staticmethod
+    def _handle_expired(
+        handle: SubagentHandle,
+        ttl: float,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Return True if the handle is archived and past its TTL."""
+        if handle.completed_at is None:
+            return False
+        return ((now if now is not None else time.monotonic()) - handle.completed_at) >= ttl
+
+    def _evict_stale_archived(self) -> list[str]:
+        """Evict archived handles past TTL and trim oldest when over cap.
+
+        Returns list of evicted run_ids for testability.
+        """
+        now = time.monotonic()
+        # Evict expired
+        stale = [
+            rid
+            for rid, h in self._archived.items()
+            if self._handle_expired(h, self._archived_ttl, now=now)
+        ]
+        for rid in stale:
+            del self._archived[rid]
+        # Trim oldest if still over cap
+        if len(self._archived) > self._max_archived:
+            sorted_handles = sorted(
+                self._archived.items(),
+                key=lambda x: x[1].completed_at or 0.0,
+            )
+            excess = len(self._archived) - self._max_archived
+            for rid, _ in sorted_handles[:excess]:
+                del self._archived[rid]
+                stale.append(rid)
+        return stale
+
     def archive(self, run_id: str) -> bool:
-        """Move a handle from active to archived."""
+        """Move a handle from active to archived.
+
+        Triggers lazy eviction of stale archived handles.
+        """
         handle = self._runs.pop(run_id, None)
         if handle is None:
             return False
         self._archived[run_id] = handle
         self._parent_tasks.pop(run_id, None)
+        self._evict_stale_archived()
         return True
 
     def get_archived(self) -> list[SubagentHandle]:
+        self._evict_stale_archived()
         return list(self._archived.values())
+
+    def purge_archived(self) -> int:
+        """Remove all archived handles. Returns count of purged entries."""
+        count = len(self._archived)
+        self._archived.clear()
+        return count
 
     def get_by_status(self, status: str) -> list[SubagentHandle]:
         return [h for h in self._runs.values() if h.status == status]

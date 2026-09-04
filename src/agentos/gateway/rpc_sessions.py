@@ -1371,6 +1371,8 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
                     )
                 except Exception:
                     pass
+            # Evict session stream state to prevent memory leak (#1044).
+            get_session_streams().discard(key)
 
     task = asyncio.create_task(_run())
     setattr(task, "_agentos_started", False)
@@ -1479,6 +1481,7 @@ async def _handle_sessions_abort(params: dict | None, ctx: RpcContext) -> dict:
         setattr(task, "_agentos_terminal_emitted", True)
         await _emit_to_subscribers(ctx, key, "session.event.done", {"reason": "aborted"})
 
+    get_session_streams().discard(key)
     return {"aborted": cancelled, "key": key}
 
 
@@ -1951,6 +1954,7 @@ async def _handle_sessions_delete(params: dict | None, ctx: RpcContext) -> dict:
     for k in keys:
         try:
             await storage.delete_session(k)
+            get_session_streams().discard(k)
             deleted.append(k)
         except Exception as exc:
             errors.append(f"{k}: {exc}")

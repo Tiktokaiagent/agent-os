@@ -54,6 +54,14 @@ class SessionStreamRegistry:
     def current_seq(self, session_key: str) -> int:
         return self._seq_by_session.get(session_key, 0)
 
+    def discard(self, session_key: str) -> None:
+        """Remove all state for *session_key*, releasing memory.
+
+        Idempotent — safe to call for unknown keys.
+        """
+        self._seq_by_session.pop(session_key, None)
+        self._events_by_session.pop(session_key, None)
+
     def record(
         self,
         session_key: str,

@@ -63,6 +63,9 @@ _MAX_BACKGROUND_TIMEOUT = 3600.0
 _BACKGROUND_TERMINATE_TIMEOUT = 1.0
 _BACKGROUND_KILL_TIMEOUT = 1.0
 _MAX_BACKGROUND_OUTPUT_CHARS = 1_000_000
+_BG_SESSION_EVICT_TTL = 300.0  # 5 min TTL for auto-evicting completed bg sessions
+_BG_SESSION_MAX_SESSIONS = 100  # soft cap to bound memory growth
+_BG_EVICT_INTERVAL = 60.0  # how often the eviction sweep runs
 _EXEC_TERMINATE_TIMEOUT = 0.25
 _EXEC_KILL_TIMEOUT = 0.25
 _COMMAND_AUDIT_MAX_CHARS = 4096
@@ -91,6 +94,58 @@ PROCESS_ACTIONS: frozenset[str] = frozenset(
 
 # Background process session store
 _bg_sessions: dict[str, _BgSession] = {}
+# Non-None when an eviction sweep is either pending or in-flight
+_bg_evict_task: asyncio.Task[None] | None = None
+
+
+def _schedule_bg_evict() -> None:
+    """Start a one-shot eviction sweep.
+
+    Called after adding a new bg session or after _finalize_bg_session.
+    Idempotent — the first call creates the sweep task; subsequent calls
+    before the sweep completes are no-ops.
+    """
+    global _bg_evict_task
+    if _bg_evict_task is not None and not _bg_evict_task.done():
+        return
+
+    async def _evict_sweep() -> None:
+        try:
+            await asyncio.sleep(_BG_EVICT_INTERVAL)
+            _evict_stale_bg_sessions()
+        except asyncio.CancelledError:
+            pass
+
+    _bg_evict_task = asyncio.create_task(_evict_sweep())
+
+
+def _evict_stale_bg_sessions() -> None:
+    """Remove completed bg sessions past the TTL and enforce a soft cap.
+
+    1. Remove all done/timed_out/killed sessions whose ended_at + TTL < now.
+    2. If still over the soft cap, evict the oldest completed entries.
+    """
+    now = time.time()
+    cutoff = now - _BG_SESSION_EVICT_TTL
+
+    # Phase 1: TTL-based eviction of expired completed sessions
+    stale_keys = [
+        sid
+        for sid, s in _bg_sessions.items()
+        if s.done and s.ended_at is not None and s.ended_at < cutoff
+    ]
+    for sid in stale_keys:
+        del _bg_sessions[sid]
+
+    # Phase 2: if still over the soft cap, evict oldest completed
+    completed = sorted(
+        [(sid, s) for sid, s in _bg_sessions.items() if s.done],
+        key=lambda x: x[1].ended_at or 0.0,
+    )
+    over = len(completed) - _BG_SESSION_MAX_SESSIONS
+    if over > 0:
+        for sid, _ in completed[:over]:
+            del _bg_sessions[sid]
 
 
 @dataclass
@@ -608,6 +663,7 @@ def _finalize_bg_session(session: _BgSession) -> None:
     for callback in callbacks:
         with contextlib.suppress(Exception):
             callback()
+    _schedule_bg_evict()
 
 
 def _signal_bg_process(session: _BgSession, sig: signal.Signals) -> None:
@@ -964,6 +1020,7 @@ async def background_process(
             cleanup_callbacks=spawned.cleanup_callbacks,
         )
         _bg_sessions[session_id] = session
+        _schedule_bg_evict()
         effective_timeout = _resolve_background_timeout(timeout)
 
         async def _collect_restricted() -> None:
@@ -1016,6 +1073,7 @@ async def background_process(
         local_urls=_local_server_urls_from_command(command),
     )
     _bg_sessions[session_id] = session
+    _schedule_bg_evict()
     effective_timeout = _resolve_background_timeout(timeout)
 
     async def _collect_host() -> None:

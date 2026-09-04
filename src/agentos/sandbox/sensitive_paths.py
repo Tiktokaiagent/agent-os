@@ -39,6 +39,10 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "~/.npmrc",
     "~/.pypirc",
     "~/.netrc",
+    "~/.git-credentials",
+    "~/.pgpass",
+    "~/.dockercfg",
+    "~/.htpasswd",
     "~/.gnupg",
     "~/.password-store",
     "/etc",
@@ -70,6 +74,13 @@ _SENSITIVE_SUFFIXES: tuple[str, ...] = (
     "/.zsh_history",
     "/.mysql_history",
     "/.psql_history",
+    "/.git-credentials",
+    "/.pgpass",
+    "/.dockercfg",
+    "/.htpasswd",
+    "/.netrc",
+    "/.npmrc",
+    "/.pypirc",
 )
 
 _WORKSPACE_PARENT_EXCEPTION_MARKERS: tuple[str, ...] = ("/root",)

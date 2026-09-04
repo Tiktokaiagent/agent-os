@@ -222,6 +222,64 @@ def test_root_stays_readable_outside_the_destructive_intent_scan() -> None:
     assert sensitive_target_in_command("ls /", workspace=workspace) is None
 
 
+def test_credential_prefixes_detect_home_paths() -> None:
+    """All host credential files in _SENSITIVE_PREFIXES block home paths."""
+    home = str(Path.home())
+    prefixes = (".git-credentials", ".pgpass", ".dockercfg", ".htpasswd")
+    for fname in prefixes:
+        path = f"{home}/{fname}"
+        assert is_sensitive_path(path) == f"~/{fname}", path
+
+
+def test_credential_suffixes_detect_files_outside_home() -> None:
+    """All host credential suffixes block exact filename regardless of dir."""
+    suffixes = (
+        ".git-credentials", ".pgpass", ".dockercfg", ".htpasswd",
+        ".netrc", ".npmrc", ".pypirc",
+    )
+    for fname in suffixes:
+        path = f"/tmp/{fname}"
+        assert is_sensitive_path(path) == f"/{fname}", path
+
+
+def test_credential_paths_in_text_are_detected() -> None:
+    """sensitive_path_in_text catches these paths in commands."""
+    home = str(Path.home())
+    commands = (
+        f"cat {home}/.git-credentials",
+        f"type {home}/.pgpass",
+        "cat /tmp/.netrc",
+        "cat /tmp/.pypirc",
+    )
+    for cmd in commands:
+        assert sensitive_path_in_text(cmd) is not None, cmd
+
+
+def test_credential_paths_in_delete_commands_are_blocked() -> None:
+    """sensitive_target_in_command blocks deletion of these files."""
+    home = str(Path.home())
+    commands = (
+        f"rm {home}/.git-credentials",
+        "rm -f /tmp/.dockercfg",
+        "rm /tmp/.htpasswd",
+    )
+    for cmd in commands:
+        assert sensitive_target_in_command(cmd, workspace=Path("/workspace")) is not None, cmd
+
+
+def test_credential_paths_are_marked_in_text() -> None:
+    """sensitive_path_marker returns a marker for these files."""
+    home = str(Path.home())
+    paths = (
+        f"{home}/.git-credentials",
+        f"{home}/.pgpass",
+        "/tmp/.dockercfg",
+        "/some/dir/.htpasswd",
+    )
+    for p in paths:
+        assert sensitive_path_marker(p) is not None, p
+
+
 def test_root_target_detection_covers_windows_drive_roots() -> None:
     """Windows runners resolve ``/`` to a drive root, so the raw ``/`` never
     reaches the segment check there."""

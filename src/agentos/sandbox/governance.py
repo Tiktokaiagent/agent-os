@@ -31,6 +31,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -114,13 +115,16 @@ class _SessionState:
     last_reason: DenialReason | None = None
 
 
+_DEFAULT_SESSION_TTL_SECONDS: float = 86400.0  # 24 hours
+
+
 class DenialLedger:
     """Per-session denial counter with a stale-output purge hook.
 
     Thread-safe via a single ``asyncio.Lock``. The ledger lives for the
-    lifetime of a session; a future follow-up is to persist it to the
-    session store, which is tracked in :mod:`agentos.sandbox` follow-up
-    notes.
+    lifetime of a session; a configurable TTL on the last-activity
+    timestamp lets a periodic ``reap()`` sweep stale entries so abandoned
+    sessions and gateway restarts are not the only cleanup paths.
     """
 
     def __init__(
@@ -128,11 +132,14 @@ class DenialLedger:
         threshold: int = DEFAULT_DENIAL_THRESHOLD,
         *,
         stale_output_cache: StaleOutputCache | None = None,
+        session_ttl: float = _DEFAULT_SESSION_TTL_SECONDS,
     ) -> None:
         if threshold < 1:
             raise ValueError(f"threshold must be >= 1, got {threshold}")
         self._threshold = threshold
         self._sessions: dict[str, _SessionState] = {}
+        self._touched_at: dict[str, float] = {}
+        self._session_ttl = float(session_ttl)
         self._cache = (
             stale_output_cache if stale_output_cache is not None else get_stale_output_cache()
         )
@@ -147,6 +154,7 @@ class DenialLedger:
         if state is None:
             state = _SessionState()
             self._sessions[session_id] = state
+        self._touched_at[session_id] = time.time()
         return state
 
     async def record_denial(
@@ -197,10 +205,31 @@ class DenialLedger:
             state = self._sessions.get(session_id)
             return bool(state and state.total >= self._threshold)
 
+    def _evict_stale(self, now: float | None = None) -> int:
+        """Remove entries whose last-activity timestamp exceeds TTL. Returns count."""
+        if self._session_ttl <= 0:
+            return 0
+        now = now if now is not None else time.time()
+        stale = [
+            key
+            for key in list(self._sessions)
+            if now - self._touched_at.get(key, now) > self._session_ttl
+        ]
+        for key in stale:
+            self._sessions.pop(key, None)
+            self._touched_at.pop(key, None)
+        return len(stale)
+
+    async def reap(self) -> int:
+        """Evict stale denial-ledger entries. Returns count evicted."""
+        async with self._lock:
+            return self._evict_stale()
+
     async def reset_session(self, session_id: str) -> None:
         """Drop all ledger state for a session (e.g. on session end)."""
         async with self._lock:
             self._sessions.pop(session_id, None)
+            self._touched_at.pop(session_id, None)
 
     async def purge_stale_outputs(self, session_id: str, fingerprint: str) -> bool:
         """Expose the §8.3 purge as a direct public call for integration."""

@@ -83,3 +83,42 @@ def test_session_stream_registry_reports_reset_when_client_cursor_is_ahead() -> 
     assert replay.replay_complete is False
     assert replay.gap_reason == "stream_buffer_reset"
     assert replay.events == []
+
+
+def test_discard_clears_session_state() -> None:
+    """discard() removes seq and events for a known session."""
+    registry = SessionStreamRegistry(max_events_per_session=10)
+    registry.record("sess-a", "session.event.text_delta", {"text": "hi"})
+    registry.record("sess-b", "session.event.done", {"reason": "stop"})
+
+    registry.discard("sess-a")
+
+    # sess-a is gone
+    assert registry.current_seq("sess-a") == 0
+    replay = registry.replay("sess-a", 0)
+    assert replay.events == []
+    assert replay.gap_reason is None
+
+    # sess-b is untouched
+    assert registry.current_seq("sess-b") == 1
+    replay_b = registry.replay("sess-b", 0)
+    assert len(replay_b.events) == 1
+
+
+def test_discard_is_idempotent() -> None:
+    """discard() for unknown or already-discarded keys does not raise."""
+    registry = SessionStreamRegistry(max_events_per_session=10)
+    registry.discard("never-existed")
+    registry.discard("never-existed")
+    assert registry.current_seq("never-existed") == 0
+
+
+def test_discard_after_replay_preserves_new_data() -> None:
+    """After discard, fresh records start from stream_seq=1."""
+    registry = SessionStreamRegistry(max_events_per_session=10)
+    registry.record("sess", "session.event.text_delta", {"text": "old"})
+    registry.discard("sess")
+
+    entry = registry.record("sess", "session.event.text_delta", {"text": "new"})
+    assert entry["stream_seq"] == 1
+    assert registry.current_seq("sess") == 1

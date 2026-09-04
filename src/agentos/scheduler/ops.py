@@ -330,7 +330,9 @@ class SchedulerOps:
             job.next_run_at = now + timedelta(seconds=int(cron_expr))
         else:
             # CRON or EVERY with cron expression: scan forward
-            job.next_run_at = _next_run(job, now)
+            # Jitter is a one-time startup stagger applied at initial creation.
+            # Post-execution rescheduling must not re-apply it (see #1059).
+            job.next_run_at = _next_run(job, now, apply_jitter=True)
 
         _resolve_script_placeholder(job)
         await self._store.save(job)
@@ -385,6 +387,8 @@ class SchedulerOps:
                 job.next_run_at = now + timedelta(seconds=int(cron_expr))
             else:
                 job.anchor_at = None
+                # Post-edit reschedule: jitter was once applied at creation
+                # and must not accumulate on subsequent recomputes (#1059).
                 job.next_run_at = _next_run(job, now)
         elif "schedule_raw" in patch:
             raise ValueError(

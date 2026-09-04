@@ -93,6 +93,9 @@ class ProgressDecision:
         return asdict(self)
 
 
+_DEFAULT_MAX_REPEAT_ENTRIES: int = 1000
+
+
 class ProgressWatchdog:
     """Detect repeated no-progress loops without owning the main turn loop."""
 
@@ -103,6 +106,7 @@ class ProgressWatchdog:
         repeated_provider_failure_threshold: int = 2,
         repeated_tool_call_threshold: int = 3,
         observe_only: bool = True,
+        max_repeat_entries: int = _DEFAULT_MAX_REPEAT_ENTRIES,
     ) -> None:
         self.repeated_tool_error_threshold = repeated_tool_error_threshold
         self.repeated_provider_failure_threshold = repeated_provider_failure_threshold
@@ -114,6 +118,20 @@ class ProgressWatchdog:
         self._provider_failure_count = 0
         self._repeat_counts: dict[tuple[str, str], int] = {}
         self._repeat_results: dict[tuple[str, str], str] = {}
+        self._max_repeat_entries = max(1, int(max_repeat_entries))
+
+    def _trim_to_fit(self) -> None:
+        """Evict oldest entries when combined repeat dicts exceed the cap.
+
+        Python dicts preserve insertion order (3.7+), so iterating pops
+        from the front.  Both dicts are always written and deleted together.
+        """
+        over = len(self._repeat_counts) - self._max_repeat_entries
+        if over <= 0:
+            return
+        for key in list(self._repeat_counts)[:over]:
+            self._repeat_counts.pop(key, None)
+            self._repeat_results.pop(key, None)
 
     def observe(self, observation: ProgressObservation) -> ProgressDecision:
         # Checked before the progress test on purpose: a repeated *successful*
@@ -151,6 +169,7 @@ class ProgressWatchdog:
                 # A different answer means the call earned its place.
                 self._repeat_counts[key] = 1
                 self._repeat_results[key] = signature.result_hash
+            self._trim_to_fit()
             count = self._repeat_counts[key]
             if count >= self.repeated_tool_call_threshold and count > flagged_count:
                 flagged = signature
@@ -229,6 +248,11 @@ class ProgressWatchdog:
         self._tool_error_count = 0
         self._last_provider_failure = None
         self._provider_failure_count = 0
+
+    def clear(self) -> None:
+        """Explicitly wipe all repeat-tracker state."""
+        self._repeat_counts.clear()
+        self._repeat_results.clear()
 
 
 def guidance_for(decision: ProgressDecision) -> str:

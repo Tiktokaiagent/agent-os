@@ -134,3 +134,72 @@ def test_guidance_is_empty_for_an_ordinary_observation() -> None:
     decision = watchdog.observe(ProgressObservation(iteration=1, successful_tool_result=True))
 
     assert guidance_for(decision) == ""
+
+
+# ======================================================================
+# ProgressWatchdog dict-leak tests (_repeat_counts / _repeat_results)
+# ======================================================================
+
+
+def _calln(tool: str, args: dict, result: str) -> object:
+    return tool_call_signature(tool, args, result)
+
+
+class TestProgressWatchdogEviction:
+    def test_trim_to_fit_under_cap_no_eviction(self) -> None:
+        dog = ProgressWatchdog(max_repeat_entries=10)
+        dog._repeat_counts[("a", "1")] = 1
+        dog._repeat_results[("a", "1")] = "r"
+        dog._trim_to_fit()
+        assert len(dog._repeat_counts) == 1
+
+    def test_trim_to_fit_evicts_oldest(self) -> None:
+        dog = ProgressWatchdog(max_repeat_entries=2)
+        dog._repeat_counts[("a", "1")] = 1
+        dog._repeat_results[("a", "1")] = "r1"
+        dog._repeat_counts[("b", "2")] = 1
+        dog._repeat_results[("b", "2")] = "r2"
+        dog._repeat_counts[("c", "3")] = 1  # triggers evict
+        dog._repeat_results[("c", "3")] = "r3"
+        dog._trim_to_fit()
+        assert ("a", "1") not in dog._repeat_counts
+        assert ("b", "2") in dog._repeat_counts
+        assert ("c", "3") in dog._repeat_counts
+
+    def test_trim_to_fit_syncs_both_dicts(self) -> None:
+        dog = ProgressWatchdog(max_repeat_entries=1)
+        dog._repeat_counts[("a", "1")] = 1
+        dog._repeat_results[("a", "1")] = "r1"
+        dog._repeat_counts[("b", "2")] = 1  # triggers evict of a
+        dog._repeat_results[("b", "2")] = "r2"
+        dog._trim_to_fit()
+        assert ("a", "1") not in dog._repeat_counts
+        assert ("a", "1") not in dog._repeat_results
+
+    def test_observe_triggers_trim_when_over_cap(self) -> None:
+        dog = ProgressWatchdog(repeated_tool_call_threshold=2, max_repeat_entries=2)
+        call1 = _calln("a", {"p": "1"}, "r1")
+        call2 = _calln("b", {"p": "2"}, "r2")
+        call3 = _calln("c", {"p": "3"}, "r3")
+
+        dog.observe(ProgressObservation(iteration=1, tool_calls=(call1,)))
+        dog.observe(ProgressObservation(iteration=2, tool_calls=(call2,)))
+        dog.observe(ProgressObservation(iteration=3, tool_calls=(call3,)))
+
+        assert len(dog._repeat_counts) <= 2
+
+    def test_default_max_repeat_entries_positive(self) -> None:
+        from agentos.engine.progress_watchdog import _DEFAULT_MAX_REPEAT_ENTRIES
+        assert _DEFAULT_MAX_REPEAT_ENTRIES > 0
+
+    def test_custom_max_repeat_entries_accepted(self) -> None:
+        dog = ProgressWatchdog(max_repeat_entries=50)
+        assert dog._max_repeat_entries == 50
+
+    def test_clear_wipes_both_dicts(self) -> None:
+        dog = ProgressWatchdog()
+        dog._repeat_counts[("a", "1")] = 1
+        dog._repeat_results[("a", "1")] = "r"
+        dog.clear()
+        assert len(dog._repeat_counts) == 0
+        assert len(dog._repeat_results) == 0

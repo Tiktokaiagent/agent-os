@@ -38,6 +38,8 @@ class PendingApproval:
 
 
 _DEFAULT_APPROVAL_QUEUE_PATH = state_dir("approval_queue.sqlite")
+_DEFAULT_SESSION_ELEVATED_TTL_SECONDS: float = 86400.0  # 24 hours
+_DEFAULT_NODE_SETTINGS_TTL_SECONDS: float = 86400.0  # 24 hours
 
 
 class ApprovalQueue:
@@ -47,13 +49,19 @@ class ApprovalQueue:
         *,
         db_path: str | None = None,
         poll_interval: float = 0.25,
+        session_elevated_ttl: float = _DEFAULT_SESSION_ELEVATED_TTL_SECONDS,
+        node_settings_ttl: float = _DEFAULT_NODE_SETTINGS_TTL_SECONDS,
     ):
         self._pending: dict[str, PendingApproval] = {}
         self._timeout = default_timeout
         self._poll_interval = max(0.01, float(poll_interval))
         self._global_settings = ApprovalSettings()
         self._node_settings: dict[str, ApprovalSettings] = {}
+        self._node_settings_set_at: dict[str, float] = {}
         self._session_elevated_modes: dict[str, str] = {}
+        self._session_elevated_set_at: dict[str, float] = {}
+        self._session_elevated_ttl = float(session_elevated_ttl)
+        self._node_settings_ttl = float(node_settings_ttl)
 
         self._db_path = Path(db_path or os.fspath(_DEFAULT_APPROVAL_QUEUE_PATH))
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -350,20 +358,96 @@ class ApprovalQueue:
             for row in rows
         ]
 
+    # ------------------------------------------------------------------
+    # Eviction helpers (bounded-dict safety)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_entry_stale(set_at: float | None, ttl: float, now: float) -> bool:
+        return set_at is not None and now - set_at > ttl
+
+    def _evict_stale_session_modes(self, now: float | None = None) -> int:
+        """Remove session elevated-mode entries that exceed TTL. Returns count evicted."""
+        if self._session_elevated_ttl <= 0:
+            return 0
+        now = now if now is not None else time.time()
+        stale = [
+            key
+            for key in list(self._session_elevated_modes)
+            if self._is_entry_stale(
+                self._session_elevated_set_at.get(key),
+                self._session_elevated_ttl,
+                now,
+            )
+        ]
+        for key in stale:
+            self._session_elevated_modes.pop(key, None)
+            self._session_elevated_set_at.pop(key, None)
+        return len(stale)
+
+    def _evict_stale_node_settings(self, now: float | None = None) -> int:
+        """Remove node-settings entries that exceed TTL. Returns count evicted."""
+        if self._node_settings_ttl <= 0:
+            return 0
+        now = now if now is not None else time.time()
+        stale = [
+            key
+            for key in list(self._node_settings)
+            if self._is_entry_stale(
+                self._node_settings_set_at.get(key),
+                self._node_settings_ttl,
+                now,
+            )
+        ]
+        for key in stale:
+            self._node_settings.pop(key, None)
+            self._node_settings_set_at.pop(key, None)
+        return len(stale)
+
+    def reap(self) -> tuple[int, int]:
+        """Evict stale session modes and node settings. Returns (stale_modes, stale_nodes)."""
+        return (self._evict_stale_session_modes(), self._evict_stale_node_settings())
+
+    # ------------------------------------------------------------------
+    # Session elevated mode
+    # ------------------------------------------------------------------
+
     def set_elevated_mode(self, session_key: str, mode: str | None) -> None:
         key = session_key.strip()
         if not key:
             raise ValueError("session_key is required")
         if mode in (None, "", "off"):
             self._session_elevated_modes.pop(key, None)
+            self._session_elevated_set_at.pop(key, None)
             return
         if mode not in VALID_ELEVATED_MODES:
             raise ValueError("mode must be one of: on, bypass, full, off")
         self._session_elevated_modes[key] = mode
+        self._session_elevated_set_at[key] = time.time()
+
+    def clear_elevated_mode(self, session_key: str) -> None:
+        """Explicitly remove an elevated-mode entry for *session_key*.
+
+        Symmetric to ``set_elevated_mode(key, None)`` but skips the
+        strip-and-validate dance so callers that know the key is clean
+        (e.g., session teardown hooks) can evict directly.
+        """
+        self._session_elevated_modes.pop(session_key, None)
+        self._session_elevated_set_at.pop(session_key, None)
 
     def get_elevated_mode(self, session_key: str | None) -> str | None:
         key = (session_key or "").strip()
         if not key:
+            return None
+        # Evict-on-read: if the entry has exceeded its TTL, drop it.
+        ts = self._session_elevated_set_at.get(key)
+        if (
+            ts is not None
+            and self._session_elevated_ttl > 0
+            and time.time() - ts > self._session_elevated_ttl
+        ):
+            self._session_elevated_modes.pop(key, None)
+            self._session_elevated_set_at.pop(key, None)
             return None
         return self._session_elevated_modes.get(key)
 
@@ -395,7 +479,21 @@ class ApprovalQueue:
         return count
 
     def get_settings(self, node_id: str | None = None) -> ApprovalSettings:
-        settings = self._node_settings.get(node_id) if node_id else self._global_settings
+        if node_id:
+            # Evict-on-read for stale node settings before returning.
+            ts = self._node_settings_set_at.get(node_id)
+            if (
+                ts is not None
+                and self._node_settings_ttl > 0
+                and time.time() - ts > self._node_settings_ttl
+            ):
+                self._node_settings.pop(node_id, None)
+                self._node_settings_set_at.pop(node_id, None)
+                settings = None
+            else:
+                settings = self._node_settings.get(node_id)
+        else:
+            settings = self._global_settings
         if settings is None:
             settings = self._global_settings
         return ApprovalSettings(
@@ -405,7 +503,24 @@ class ApprovalQueue:
         )
 
     def has_node_settings(self, node_id: str) -> bool:
-        return node_id in self._node_settings
+        # Evict-on-read: drop stale entries on access.
+        if node_id in self._node_settings:
+            ts = self._node_settings_set_at.get(node_id)
+            if (
+                ts is not None
+                and self._node_settings_ttl > 0
+                and time.time() - ts > self._node_settings_ttl
+            ):
+                self._node_settings.pop(node_id, None)
+                self._node_settings_set_at.pop(node_id, None)
+                return False
+            return True
+        return False
+
+    def remove_node_settings(self, node_id: str) -> None:
+        """Explicitly remove settings for *node_id*."""
+        self._node_settings.pop(node_id, None)
+        self._node_settings_set_at.pop(node_id, None)
 
     def set_settings(
         self,
@@ -425,6 +540,7 @@ class ApprovalQueue:
             self._global_settings = settings
         else:
             self._node_settings[node_id] = settings
+            self._node_settings_set_at[node_id] = time.time()
         return settings
 
     def close(self) -> None:

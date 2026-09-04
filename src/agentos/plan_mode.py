@@ -32,6 +32,7 @@ EXIT_PLAN_TOOL_NAME = "exit_plan_mode"
 PLAN_STATUS_PRESENTED = "plan_presented"
 
 _MAX_PLAN_CHARS = 40_000
+_DEFAULT_SESSION_TTL_SECONDS: float = 86400.0  # 24 hours
 
 # Read/research surface available while plan mode is on. This is an
 # ALLOWLIST on purpose (the cron-surface precedent): a tool added later is
@@ -87,30 +88,57 @@ class PlanModeState:
 
 
 class PlanModeStore:
-    """In-memory per-session plan-mode flags. No TTL by design: a mode that
-    silently expires mid-plan hands write tools back without the user's
-    say-so, which is the worst possible failure for this feature. Only an
-    explicit disable (approval, ``/plan off``) or a gateway restart clears it.
+    """In-memory per-session plan-mode flags.
+
+    Entries survive the lifetime of an active session (``is_enabled`` and
+    ``get`` never auto-evict).  A configurable TTL on the last-enable
+    timestamp lets a periodic ``reap()`` sweep stale entries so abandoned
+    sessions and gateway restarts are not the only cleanup paths.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, session_ttl: float = _DEFAULT_SESSION_TTL_SECONDS) -> None:
         self._sessions: dict[str, PlanModeState] = {}
+        self._enabled_at: dict[str, float] = {}
+        self._session_ttl = float(session_ttl)
 
     def enable(self, session_key: str) -> None:
         key = (session_key or "").strip()
         if not key:
             raise ValueError("session_key is required")
-        self._sessions.setdefault(key, PlanModeState(enabled_at=time.time()))
+        now = time.time()
+        self._sessions.setdefault(key, PlanModeState(enabled_at=now))
+        self._enabled_at[key] = now
 
     def disable(self, session_key: str) -> bool:
         """Turn plan mode off. Returns True when it was on."""
-        return self._sessions.pop((session_key or "").strip(), None) is not None
+        key = (session_key or "").strip()
+        self._enabled_at.pop(key, None)
+        return self._sessions.pop(key, None) is not None
 
     def is_enabled(self, session_key: str) -> bool:
         return (session_key or "").strip() in self._sessions
 
     def get(self, session_key: str) -> PlanModeState | None:
         return self._sessions.get((session_key or "").strip())
+
+    def _evict_stale(self, now: float | None = None) -> int:
+        """Remove entries whose last-enable timestamp exceeds TTL. Returns count."""
+        if self._session_ttl <= 0:
+            return 0
+        now = now if now is not None else time.time()
+        stale = [
+            key
+            for key in list(self._sessions)
+            if now - self._enabled_at.get(key, now) > self._session_ttl
+        ]
+        for key in stale:
+            self._sessions.pop(key, None)
+            self._enabled_at.pop(key, None)
+        return len(stale)
+
+    def reap(self) -> int:
+        """Evict stale plan-mode entries. Returns count evicted."""
+        return self._evict_stale()
 
 
 _store: PlanModeStore | None = None

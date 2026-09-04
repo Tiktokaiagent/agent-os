@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -97,3 +98,82 @@ class TestPayloadHelpers:
         text = format_plan_as_text("1. Do X")
         assert "1. Do X" in text
         assert "/plan off" in text
+
+
+# ======================================================================
+# PlanModeStore memory-leak tests (_sessions never evicted)
+# ======================================================================
+
+
+class TestPlanModeStoreEviction:
+    def test_evict_stale_empty(self) -> None:
+        store = PlanModeStore()
+        assert store._evict_stale() == 0
+
+    def test_fresh_entries_survive_eviction(self) -> None:
+        store = PlanModeStore(session_ttl=60.0)
+        store.enable("k1")
+        store.enable("k2")
+        assert store._evict_stale() == 0
+        assert store.is_enabled("k1")
+        assert store.is_enabled("k2")
+
+    def test_stale_entries_evicted(self) -> None:
+        store = PlanModeStore(session_ttl=0.01)
+        store.enable("k1")
+        time
+        time.sleep(0.02)
+        assert store._evict_stale() == 1
+        assert not store.is_enabled("k1")
+
+    def test_mixed_stale_and_fresh(self) -> None:
+        store = PlanModeStore(session_ttl=0.03)
+        store.enable("old")
+        time
+        time.sleep(0.04)
+        store.enable("recent")
+        evicted = store._evict_stale()
+        assert evicted == 1
+        assert not store.is_enabled("old")
+        assert store.is_enabled("recent")
+
+    def test_reap_public_entry_point(self) -> None:
+        store = PlanModeStore(session_ttl=0.01)
+        store.enable("k1")
+        time
+        time.sleep(0.02)
+        assert store.reap() == 1
+        assert not store.is_enabled("k1")
+
+    def test_reap_no_stale(self) -> None:
+        store = PlanModeStore()
+        assert store.reap() == 0
+
+    def test_disable_clears_timestamp(self) -> None:
+        store = PlanModeStore()
+        store.enable("k1")
+        store.disable("k1")
+        assert "k1" not in store._enabled_at
+
+    def test_disable_then_re_enable(self) -> None:
+        store = PlanModeStore()
+        store.enable("k1")
+        store.disable("k1")
+        store.enable("k1")
+        assert store.is_enabled("k1")
+
+    def test_constructor_default_ttl(self) -> None:
+        from agentos.plan_mode import _DEFAULT_SESSION_TTL_SECONDS
+        assert _DEFAULT_SESSION_TTL_SECONDS > 0
+
+    def test_custom_ttl_accepted(self) -> None:
+        store = PlanModeStore(session_ttl=3600.0)
+        assert store._session_ttl == 3600.0
+
+    def test_zero_ttl_disables_eviction(self) -> None:
+        store = PlanModeStore(session_ttl=0.0)
+        store.enable("k1")
+        time
+        time.sleep(0.02)
+        assert store._evict_stale() == 0
+        assert store.is_enabled("k1")

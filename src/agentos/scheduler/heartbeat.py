@@ -34,7 +34,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +64,10 @@ _DEFAULT_PRIORITY_BANDS: dict[str, float] = {
     "medium": 5.0,
     "low": 30.0,
 }
+
+
+_DEFAULT_BUFFER_TTL_SECONDS: float = 3600.0
+_DEFAULT_MAX_BUFFER_SIZE: int = 500
 
 
 @dataclass
@@ -148,29 +152,124 @@ class HeartbeatRunner:
     across event loops without an external lock. The buffer is keyed by
     priority band so each band coalesces independently and observes its own
     cooldown.
+
+    Bounded buffers
+    ---------------
+    To prevent memory leaks on long-running agents, each priority band's
+    buffer is bounded by:
+
+    * ``max_buffer_size`` — oldest events are evicted when a new event is
+      ingested and the buffer is full (evict-on-write).
+    * ``buffer_ttl_seconds`` — events whose ``emitted_at`` predates the TTL
+      are skipped during ``poll()`` (evict-on-read) and never emitted.
+
+    Both knobs are configurable via constructor parameters, with sensible
+    defaults for long-running agents (1 hour TTL, 500 per band).
     """
 
-    def __init__(self, config: HeartbeatConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: HeartbeatConfig | None = None,
+        *,
+        buffer_ttl_seconds: float = _DEFAULT_BUFFER_TTL_SECONDS,
+        max_buffer_size: int = _DEFAULT_MAX_BUFFER_SIZE,
+    ) -> None:
         self._config = config or HeartbeatConfig()
         self._buffers: dict[str, list[HeartbeatEvent]] = defaultdict(list)
         self._last_tick: dict[str, datetime] = {}
+        self._buffer_ttl_seconds = buffer_ttl_seconds
+        self._max_buffer_size = max_buffer_size
 
     @property
     def config(self) -> HeartbeatConfig:
         return self._config
 
+    @property
+    def buffer_ttl_seconds(self) -> float:
+        return self._buffer_ttl_seconds
+
+    @property
+    def max_buffer_size(self) -> int:
+        return self._max_buffer_size
+
     def replace_config(self, config: HeartbeatConfig) -> None:
         """Swap the active config — called by HeartbeatConfigWatcher on live edits."""
         self._config = config
 
+    # ------------------------------------------------------------------
+    # Buffer management
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _evict_stale_events(
+        events: list[HeartbeatEvent],
+        moment: datetime,
+        ttl: float,
+    ) -> list[HeartbeatEvent]:
+        """Return events whose ``emitted_at`` is within TTL of *moment*.
+
+        Exposed as a static method so tests can exercise it without a runner
+        instance.
+        """
+        cutoff = moment - timedelta(seconds=ttl)
+        # Preserve relative order of fresh events.
+        return [e for e in events if e.emitted_at > cutoff]
+
+    def _evict_stale_buffers(self, moment: datetime) -> None:
+        """Remove stale (beyond TTL) events from all bands in-place.
+
+        Bands whose buffer becomes empty are left in the dict as empty lists
+        and cleaned during the next emission cycle.
+        """
+        for band in list(self._buffers):
+            fresh = self._evict_stale_events(
+                self._buffers[band], moment, self._buffer_ttl_seconds
+            )
+            if fresh:
+                self._buffers[band] = fresh
+            else:
+                self._buffers[band] = []
+
+    def _trim_to_fit(self, band: str) -> None:
+        """Evict oldest events from *band*'s buffer if it exceeds max size."""
+        buf = self._buffers[band]
+        overflow = len(buf) - self._max_buffer_size
+        if overflow > 0:
+            self._buffers[band] = buf[overflow:]
+
     def ingest(self, event: HeartbeatEvent) -> None:
         self._buffers[event.priority].append(event)
+        self._trim_to_fit(event.priority)
 
     def pending_counts(self) -> dict[str, int]:
         return {band: len(events) for band, events in self._buffers.items() if events}
 
+    def purge(self) -> None:
+        """Clear all buffered events for every band without affecting tick timestamps.
+
+        Callers that want to reclaim memory without waiting for the next
+        ``poll()`` emission (e.g., on config change, manual reset, or
+        graceful shutdown) can invoke this.
+        """
+        for band in self._buffers:
+            self._buffers[band] = []
+
+    def clear(self) -> None:
+        """Reset the runner to its initial state — clear buffers and tick history.
+
+        Unlike ``purge()`` this also resets ``_last_tick``, so the next
+        ``poll()`` will emit regardless of cooldown state.
+        """
+        self._buffers.clear()
+        self._last_tick.clear()
+
     def poll(self, now: datetime | None = None) -> list[HeartbeatTick]:
         moment = now or datetime.now(UTC)
+
+        # Always evict stale events first, even outside active hours, so
+        # the buffer does not grow while the runner is idle.
+        self._evict_stale_buffers(moment)
+
         if not self._config.is_within_active_hours(moment):
             return []
 

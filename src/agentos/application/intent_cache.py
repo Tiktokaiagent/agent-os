@@ -218,11 +218,9 @@ class IntentApprovalCache:
     def clear_scope(self, scope: str) -> None:
         """Drop every entry whose scope matches, leaving other scopes intact."""
         with self._lock:
-            self._entries = {
-                intent: data
-                for intent, data in self._entries.items()
-                if data[1] != scope
-            }
+            to_drop = [intent for intent, data in self._entries.items() if data[1] == scope]
+            for intent in to_drop:
+                self._entries.discard(intent)
 
 
 _cache: IntentApprovalCache | None = None

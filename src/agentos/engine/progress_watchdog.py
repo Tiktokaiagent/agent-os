@@ -152,7 +152,8 @@ class ProgressWatchdog:
             key = signature.key
             previous = self._repeat_results.get(key)
             if previous is not None and previous == signature.result_hash:
-                self._repeat_counts[key] = self._repeat_counts.get(key, 1) + 1
+                cur = self._repeat_counts.get(key) or 1
+                self._repeat_counts[key] = cur + 1
             else:
                 # A different answer means the call earned its place.
                 self._repeat_counts[key] = 1

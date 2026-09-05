@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from threading import Lock
-from typing import TypeVar
+from typing import TypeVar, cast
 
 KT = TypeVar("KT")
 VT = TypeVar("VT")
@@ -29,19 +29,6 @@ _DEFAULT_MAX_ENTRIES = 500
 
 class BoundedRegistry[KT, VT]:
     """A dict-like bounded registry with LRU eviction and optional TTL.
-
-    Thread-safe for both sync and async callers (fast dict ops under a
-    ``threading.Lock``).
-
-    Parameters
-    ----------
-    max_entries:
-        Hard cap on the number of entries. When exceeded, oldest entries
-        (by insertion or last-set order) are evicted first. ``0`` disables
-        the cap (use with caution).
-    ttl_seconds:
-        Entries past this age (measured by ``time.monotonic``) are evicted
-        on the next mutating operation. ``0.0`` disables TTL eviction.
     """
 
     def __init__(
@@ -58,20 +45,15 @@ class BoundedRegistry[KT, VT]:
         self._lock = Lock()
         self._eviction_count = 0
 
-    # ── public API ────────────────────────────────────────────────
-
     def get(self, key: KT, default: VT | None = None) -> VT | None:
-        """Return the value for *key*, or *default*."""
         with self._lock:
             self._evict_stale()
-            raw = self._data.get(key, _MISSING)
-            if raw is _MISSING:
+            if key not in self._data:
                 return default
             self._data.move_to_end(key)
-            return raw
+            return self._data[key]
 
     def set(self, key: KT, value: VT) -> None:
-        """Insert or overwrite *key* -> *value*."""
         with self._lock:
             self._evict_stale()
             self._data[key] = value
@@ -80,7 +62,6 @@ class BoundedRegistry[KT, VT]:
             self._trim_to_fit()
 
     def discard(self, key: KT) -> bool:
-        """Remove *key* if present. Returns True when it existed."""
         with self._lock:
             was_present = key in self._data
             self._data.pop(key, None)
@@ -88,7 +69,6 @@ class BoundedRegistry[KT, VT]:
             return was_present
 
     def get_or_create(self, key: KT, factory: type[VT] | None = None) -> VT:
-        """Return the existing entry or create+store a new one."""
         with self._lock:
             self._evict_stale()
             try:
@@ -96,15 +76,16 @@ class BoundedRegistry[KT, VT]:
                 return self._data[key]
             except KeyError:
                 pass
-            value = (factory or type(None))() if factory is not None else None
-            self._data[key] = value
+            if factory is not None:
+                self._data[key] = factory()
+            else:
+                self._data[key] = cast(VT, None)
             self._data.move_to_end(key)
             self._timestamps[key] = time.monotonic()
             self._trim_to_fit()
-            return value
+            return self._data[key]
 
     def clear(self) -> int:
-        """Remove all entries. Returns the count of removed entries."""
         with self._lock:
             count = len(self._data)
             self._data.clear()
@@ -140,27 +121,22 @@ class BoundedRegistry[KT, VT]:
             return iter(list(self._data.keys()))
 
     def items(self) -> list[tuple[KT, VT]]:
-        """Return a snapshot of all (key, value) pairs."""
         with self._lock:
             return list(self._data.items())
 
     def pop(self, key: KT, default: VT | None = None) -> VT | None:
-        """Remove *key* and return its value, or *default*."""
         with self._lock:
             self._timestamps.pop(key, None)
-            raw = self._data.pop(key, _MISSING)
-            return raw if raw is not _MISSING else default
+            if key not in self._data:
+                return default
+            return self._data.pop(key)
 
     def values(self) -> list[VT]:
-        """Return a snapshot of all values (safe to iterate outside lock)."""
         with self._lock:
             return list(self._data.values())
 
-    # ── properties ────────────────────────────────────────────────
-
     @property
     def eviction_count(self) -> int:
-        """Total entries evicted (TTL + cap) over the lifetime."""
         return self._eviction_count
 
     @property
@@ -171,10 +147,7 @@ class BoundedRegistry[KT, VT]:
     def ttl_seconds(self) -> float:
         return self._ttl_seconds
 
-    # ── internal ──────────────────────────────────────────────────
-
     def _evict_stale(self) -> None:
-        """Remove entries whose TTL has expired (no-op when TTL is 0)."""
         if self._ttl_seconds <= 0 or not self._timestamps:
             return
         now = time.monotonic()
@@ -186,17 +159,9 @@ class BoundedRegistry[KT, VT]:
             self._eviction_count += 1
 
     def _trim_to_fit(self) -> None:
-        """Evict oldest entries when over the cap (no-op when cap is 0)."""
         if self._max_entries <= 0:
             return
         while len(self._data) > self._max_entries:
             oldest, _ = self._data.popitem(last=False)
             self._timestamps.pop(oldest, None)
             self._eviction_count += 1
-
-
-class _MissingSentinel:
-    pass
-
-
-_MISSING = _MissingSentinel()

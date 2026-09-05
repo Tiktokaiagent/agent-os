@@ -17,7 +17,6 @@ import pytest
 
 from agentos.util.bounded_registry import BoundedRegistry
 
-
 # ── cap / LRU ─────────────────────────────────────────────────────
 
 

@@ -24,6 +24,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from agentos.util.bounded_registry import BoundedRegistry
+
 ProgressAction = Literal["observe", "warn", "block"]
 
 
@@ -112,8 +114,12 @@ class ProgressWatchdog:
         self._tool_error_count = 0
         self._last_provider_failure: str | None = None
         self._provider_failure_count = 0
-        self._repeat_counts: dict[tuple[str, str], int] = {}
-        self._repeat_results: dict[tuple[str, str], str] = {}
+        self._repeat_counts: BoundedRegistry[tuple[str, str], int] = BoundedRegistry(
+            max_entries=500
+        )
+        self._repeat_results: BoundedRegistry[tuple[str, str], str] = BoundedRegistry(
+            max_entries=500
+        )
 
     def observe(self, observation: ProgressObservation) -> ProgressDecision:
         # Checked before the progress test on purpose: a repeated *successful*

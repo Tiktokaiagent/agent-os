@@ -162,6 +162,33 @@ class OllamaProvider:
         self._base_url = base_url.rstrip("/")
         self._proxy = proxy or None
 
+    async def health_check(self) -> str | None:
+        """Quick health check for Ollama. Returns None if healthy, error string if down."""
+        try:
+            async with httpx.AsyncClient(
+                timeout=3.0, trust_env=_trust_env(), proxy=self._proxy,
+            ) as client:
+                resp = await client.get(f"{self._base_url}/api/tags")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    models = data.get("models", [])
+                    if not any(m["name"] == self._model for m in models):
+                        return (
+                            f"Ollama is running but model {self._model!r} is not pulled."
+                            f"  Run: ollama pull {self._model}"
+                        )
+                    return None
+                return f"Ollama returned HTTP {resp.status_code} - is the server running?"
+        except httpx.ConnectError:
+            return (
+                f"Cannot connect to Ollama at {self._base_url}."
+                f"  Ensure Ollama is running: ollama serve"
+            )
+        except httpx.TimeoutException:
+            return f"Ollama at {self._base_url} did not respond within 3s."
+        except httpx.RequestError as exc:
+            return f"Ollama request error: {exc}"
+
     @property
     def model(self) -> str:
         """Model id this provider was configured with.

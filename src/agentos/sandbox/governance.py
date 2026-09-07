@@ -172,11 +172,17 @@ class DenialLedger:
 
     async def count(self, session_id: str, fingerprint: str) -> int:
         async with self._lock:
-            return self._sessions.get(session_id, _SessionState()).counts.get(fingerprint, 0)
+            state = self._sessions.get(session_id)
+            if state is None:
+                return 0
+            return state.counts.get(fingerprint, 0)
 
     async def count_session(self, session_id: str) -> int:
         async with self._lock:
-            return self._sessions.get(session_id, _SessionState()).total
+            state = self._sessions.get(session_id)
+            if state is None:
+                return 0
+            return state.total
 
     async def is_paused(self, session_id: str) -> bool:
         async with self._lock:

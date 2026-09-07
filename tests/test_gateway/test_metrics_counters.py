@@ -255,10 +255,16 @@ async def test_agentos_queue_depth_multi_session_total() -> None:
         await rt.wait(h3.task_id, timeout=2.0)
 
     qd_events = [e for e in captured if e.get("metric") == "agentos_queue_depth"]
-    assert len(qd_events) == 3
-    # First enqueue: 1 pending on sess-a (total=1)
+    assert len(qd_events) == 6
+    # Enqueue task-1: 1 pending (total=1)
     assert qd_events[0]["value"] == 1
-    # Second enqueue: task-1 running, task-2 pending on sess-a (total=1)
-    assert qd_events[1]["value"] == 1
-    # Third enqueue: task-2 pending on sess-a, task-3 pending on sess-b (total=2)
-    assert qd_events[2]["value"] == 2
+    # _remove_pending when task-1 moves to running: 0 pending (total=0)
+    assert qd_events[1]["value"] == 0
+    # Enqueue task-2: 1 pending on sess-a (total=1)
+    assert qd_events[2]["value"] == 1
+    # Enqueue task-3: task-2 pending on sess-a, task-3 pending on sess-b (total=2)
+    assert qd_events[3]["value"] == 2
+    # _remove_pending when task-2 moves to running: task-3 still pending (total=1)
+    assert qd_events[4]["value"] == 1
+    # _remove_pending when task-3 moves to running: 0 pending (total=0)
+    assert qd_events[5]["value"] == 0

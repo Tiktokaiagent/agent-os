@@ -46,7 +46,6 @@ _SENSITIVE_PREFIXES: tuple[str, ...] = (
     "/sys",
     "/proc",
     "/dev",
-    "/root",
     "/var/log",
     "/lib/systemd",
     "/usr/lib/systemd",
@@ -428,6 +427,10 @@ def sensitive_target_in_command(
     for _kind, target in _extract_intents(command, base_dir=effective_workspace):
         if _is_root_target(target):
             return _ROOT_TARGET_MARKER
+        # /root is dangerous to destroy but safe to read/list, so only
+        # flagged in the destructive scanner, not in _SENSITIVE_PREFIXES.
+        if target == "/root":
+            return "/root"
         marker = sensitive_path_marker(target, workspace=effective_workspace)
         if marker is not None:
             return marker

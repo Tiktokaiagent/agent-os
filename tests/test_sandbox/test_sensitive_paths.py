@@ -130,14 +130,22 @@ def test_every_rm_in_a_compound_command_is_checked() -> None:
 def test_sensitive_reads_in_a_later_segment_are_blocked_at_the_tool_boundary() -> None:
     """Issue #676: the delete-intent scan only sees ``rm`` targets, so a
     non-destructive second segment (``cat /root/.bash_history``) is caught by
-    the text scan ``exec_command`` runs alongside it, not by this one."""
+    the text scan ``exec_command`` runs alongside it, not by this one.
+
+    ``ls /root`` is not flagged — /root as a directory is safe to read (GH #1374).
+    But /root/.bash_history still triggers via the suffix match."""
     workspace = Path("/workspace")
 
+    # ``ls /root`` alone is not sensitive — /root as a directory is safe to
+    # read or list (GH #1374). The destructive scan also skips it as benign.
     assert sensitive_target_in_command("rm /tmp/ok; ls /root", workspace=workspace) is None
-    assert sensitive_path_in_text("rm /tmp/ok; ls /root", workspace=workspace) == "/root"
+    assert sensitive_path_in_text("rm /tmp/ok; ls /root", workspace=workspace) is None
+    # But accessing a sensitive file under /root still hits the suffix marker
     assert (
-        sensitive_path_in_text("rm /tmp/ok; cat /root/.bash_history", workspace=workspace)
-        == "/root"
+        sensitive_path_in_text(
+            "rm /tmp/ok; cat /root/.bash_history", workspace=workspace
+        )
+        == "/.bash_history"
     )
 
 

@@ -204,12 +204,13 @@ async def git_commit(
     workdir: str | None = None,
 ) -> str:
     cwd = _effective_workdir(workdir)
-    if files:
+    if files is not None and files:
         for file_path in files:
             _reject_foreign_git_path(file_path)
         await _run_git("add", "--", *files, cwd=cwd)
-    else:
+    elif files is None:
         await _run_git("add", "-A", cwd=cwd)
+    # files=[] explictly passes an empty list — commit staged only, no git add
     return await _run_git("commit", "-m", message, cwd=cwd)
 
 

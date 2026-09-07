@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 import uuid
 from dataclasses import asdict, replace
@@ -11,6 +10,7 @@ from typing import Any, cast
 
 import structlog
 
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.cache_break_monitor import notify_compaction
 from agentos.engine.start_turn import start_turn_via_runtime
 from agentos.gateway import attachment_ingest as _attachment_ingest
@@ -63,15 +63,6 @@ _MAX_TOTAL_ATTACHMENT_BYTES = _attachment_ingest.MAX_TOTAL_ATTACHMENT_BYTES
 _MAX_ATTACHMENTS = _attachment_ingest.MAX_ATTACHMENTS
 
 
-def _accepts_keyword_arg(func: Any, name: str) -> bool:
-    try:
-        params = inspect.signature(func).parameters
-    except (TypeError, ValueError):
-        return True
-    return name in params or any(
-        param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
-    )
-
 
 def _clean_cancel_source(value: Any, default: str) -> str:
     text = str(value or "").strip()
@@ -94,9 +85,9 @@ async def _cancel_task_runtime(
 ) -> int:
     cancel = getattr(task_runtime, "cancel")
     kwargs: dict[str, Any] = {"session_key": session_key}
-    if _accepts_keyword_arg(cancel, "source"):
+    if accepts_keyword_arg(cancel, "source"):
         kwargs["source"] = source
-    if _accepts_keyword_arg(cancel, "reason"):
+    if accepts_keyword_arg(cancel, "reason"):
         kwargs["reason"] = reason
     return int(await cancel(**kwargs))
 
@@ -2117,7 +2108,7 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
                 compact_kwargs: dict[str, Any] = {
                     "custom_instructions": custom_instructions,
                 }
-                if _accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
                 result = await compact_with_result(
                     key,

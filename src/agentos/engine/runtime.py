@@ -35,6 +35,7 @@ from agentos.attachment_refs import (
     transcript_material_path,
 )
 from agentos.bootstrap_types import BootstrapFileReport
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.contracts.attachments import (
     ALLOWED_MEDIA_TYPES as _ALLOWED_ENGINE_MEDIA_TYPES,
 )
@@ -641,13 +642,6 @@ _SAFETY_MODULES: Final[tuple[Any, ...]] = (
 
 log = structlog.get_logger(__name__)
 
-
-def _accepts_keyword_arg(callable_obj: Any, name: str) -> bool:
-    """Return True when callable accepts `name` explicitly or via `**kwargs`."""
-    params = inspect.signature(callable_obj).parameters
-    if name in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def _strip_context_summary_marker(content: str) -> str:
@@ -5348,13 +5342,13 @@ class TurnRunner:
             if callable(compact_with_result):
                 compact_method = self._session_manager.compact_with_result
                 compact_kwargs: dict[str, Any] = {}
-                if _accepts_keyword_arg(compact_method, "compaction_id"):
+                if accepts_keyword_arg(compact_method, "compaction_id"):
                     compact_kwargs["compaction_id"] = compaction_id
-                if _accepts_keyword_arg(compact_method, "trigger_reason"):
+                if accepts_keyword_arg(compact_method, "trigger_reason"):
                     compact_kwargs["trigger_reason"] = "t3_upgrade"
-                if _accepts_keyword_arg(compact_method, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_method, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
-                if _accepts_keyword_arg(compact_method, "mutation_context"):
+                if accepts_keyword_arg(compact_method, "mutation_context"):
                     compact_kwargs["mutation_context"] = self._session_write_context_factory(
                         session_key
                     )
@@ -5590,13 +5584,13 @@ class TurnRunner:
             if callable(compact_with_result):
                 compact_method = self._session_manager.compact_with_result
                 compact_kwargs: dict[str, Any] = {}
-                if _accepts_keyword_arg(compact_method, "compaction_id"):
+                if accepts_keyword_arg(compact_method, "compaction_id"):
                     compact_kwargs["compaction_id"] = compaction_id
-                if _accepts_keyword_arg(compact_method, "trigger_reason"):
+                if accepts_keyword_arg(compact_method, "trigger_reason"):
                     compact_kwargs["trigger_reason"] = "preflight"
-                if _accepts_keyword_arg(compact_method, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_method, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
-                if _accepts_keyword_arg(compact_method, "mutation_context"):
+                if accepts_keyword_arg(compact_method, "mutation_context"):
                     compact_kwargs["mutation_context"] = self._session_write_context_factory(
                         session_key
                     )

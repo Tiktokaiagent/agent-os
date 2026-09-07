@@ -49,6 +49,7 @@ APPROVED_PACKAGE_IMPORTS: frozenset[tuple[str, str]] = frozenset({
     ("engine", "skills"),
     ("engine", "agentos_router"),
     ("engine", "tools"),
+    ("engine", "compat"),
     # llm_judge router strategy (spec 2026-07-11): the judge builds a
     # self-contained provider client, and gateway boot/doctor + onboarding
     # resolve the judge target for observability and setup.

@@ -48,6 +48,7 @@ from agentos.channels.artifact_delivery import (
 )
 from agentos.channels.stream_policy import resolve_channel_stream_policy
 from agentos.channels.types import IncomingMessage, OutgoingMessage
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.start_turn import start_turn_via_runtime
 from agentos.engine.types import (
     ArtifactEvent,
@@ -293,15 +294,6 @@ class _DirectiveTagStreamSanitizer:
         self._pending = ""
         return _strip_internal_compaction_markers(_strip_inline_directive_tags(pending))
 
-
-def _accepts_keyword_arg(callable_obj: Any, name: str) -> bool:
-    try:
-        params = inspect.signature(callable_obj).parameters
-    except (TypeError, ValueError):
-        return False
-    if name in params:
-        return True
-    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 @contextlib.asynccontextmanager
@@ -1208,9 +1200,9 @@ def _start_typing_keepalive(
 
     typing_kwargs: dict[str, Any] = {}
     if inbound is not None:
-        if _accepts_keyword_arg(send_typing, "channel_id"):
+        if accepts_keyword_arg(send_typing, "channel_id"):
             typing_kwargs["channel_id"] = inbound.channel_id
-        if _accepts_keyword_arg(send_typing, "thread_id"):
+        if accepts_keyword_arg(send_typing, "thread_id"):
             thread_id = next(
                 (
                     inbound.metadata[key]
@@ -1526,7 +1518,7 @@ class _RuntimeChannelStreamRelay:
         if not resolve_channel_stream_policy(channel).relay_stream:
             return None
         enqueue = getattr(task_runtime, "enqueue", None)
-        if not callable(enqueue) or not _accepts_keyword_arg(enqueue, "stream_event_sink"):
+        if not callable(enqueue) or not accepts_keyword_arg(enqueue, "stream_event_sink"):
             return None
         relay = cls(channel, inbound, config)
         relay._task = asyncio.create_task(relay._run())
@@ -2464,11 +2456,11 @@ async def _run_turn_batch_path(
         "agent_id": tool_ctx.agent_id,
     }
     model = resolve_agent_model(tool_ctx.agent_id, config)
-    if model is not None and _accepts_keyword_arg(turn_runner.run, "model"):
+    if model is not None and accepts_keyword_arg(turn_runner.run, "model"):
         run_kwargs["model"] = model
-    if _accepts_keyword_arg(turn_runner.run, "semantic_message"):
+    if accepts_keyword_arg(turn_runner.run, "semantic_message"):
         run_kwargs["semantic_message"] = semantic_message
-    if attachments and _accepts_keyword_arg(turn_runner.run, "attachments"):
+    if attachments and accepts_keyword_arg(turn_runner.run, "attachments"):
         run_kwargs["attachments"] = attachments
     try:
         stream = turn_runner.run(
@@ -2637,11 +2629,11 @@ async def _run_turn_streaming_path(
             "agent_id": tool_ctx.agent_id,
         }
         model = resolve_agent_model(tool_ctx.agent_id, config)
-        if model is not None and _accepts_keyword_arg(turn_runner.run, "model"):
+        if model is not None and accepts_keyword_arg(turn_runner.run, "model"):
             run_kwargs["model"] = model
-        if _accepts_keyword_arg(turn_runner.run, "semantic_message"):
+        if accepts_keyword_arg(turn_runner.run, "semantic_message"):
             run_kwargs["semantic_message"] = semantic_message
-        if attachments and _accepts_keyword_arg(turn_runner.run, "attachments"):
+        if attachments and accepts_keyword_arg(turn_runner.run, "attachments"):
             run_kwargs["attachments"] = attachments
         stream = turn_runner.run(
             msg.content,

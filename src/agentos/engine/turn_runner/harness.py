@@ -696,10 +696,10 @@ class _TurnRunnerAgentRunAdapter(AgentRunPort):
         extra_messages: list[Any] | None,
         semantic_message: str | None,
     ) -> AsyncIterator[AgentEvent]:
-        from agentos.engine.runtime import _accepts_keyword_arg
+        from agentos.compat.inspect_utils import accepts_keyword_arg
 
         kwargs: dict[str, Any] = {}
-        if _accepts_keyword_arg(agent.run_turn, "semantic_message"):
+        if accepts_keyword_arg(agent.run_turn, "semantic_message"):
             kwargs["semantic_message"] = semantic_message
         return agent.run_turn(
             turn_input,
@@ -925,7 +925,7 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
         turn_usage: dict[str, Any] | None,
         token_count: int | None,
     ) -> bool:
-        from agentos.engine.runtime import _accepts_keyword_arg
+        from agentos.compat.inspect_utils import accepts_keyword_arg
 
         session_manager = self._runner._session_manager
         if session_manager is None:
@@ -937,11 +937,11 @@ class _TurnRunnerTranscriptAppendAdapter(TranscriptAppendPort):
         }
         if reasoning_content is not None:
             append_kwargs["reasoning_content"] = reasoning_content
-        if turn_usage is not None and _accepts_keyword_arg(
+        if turn_usage is not None and accepts_keyword_arg(
             session_manager.append_message, "turn_usage"
         ):
             append_kwargs["turn_usage"] = turn_usage
-        if _accepts_keyword_arg(session_manager.append_message, "token_count"):
+        if accepts_keyword_arg(session_manager.append_message, "token_count"):
             append_kwargs["token_count"] = token_count
         await self._runner._append_session_message(session_key, **append_kwargs)
         return True

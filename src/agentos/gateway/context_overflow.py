@@ -23,12 +23,12 @@ The three policies:
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.engine.cache_break_monitor import notify_compaction
 from agentos.gateway.config import ContextOverflowPolicy, GatewayConfig
 from agentos.session.compaction import (
@@ -53,18 +53,6 @@ from agentos.session.tokenizer import estimate_tokens
 
 log = structlog.get_logger(__name__)
 
-
-def _accepts_keyword_arg(func: Any, name: str) -> bool:
-    try:
-        signature = inspect.signature(func)
-    except (TypeError, ValueError):
-        return False
-    if name in signature.parameters:
-        return True
-    return any(
-        param.kind is inspect.Parameter.VAR_KEYWORD
-        for param in signature.parameters.values()
-    )
 
 
 @dataclass
@@ -373,11 +361,11 @@ async def apply_context_overflow_policy(
             compact_with_result = getattr(session_manager, "compact_with_result", None)
             if callable(compact_with_result):
                 compact_kwargs: dict[str, Any] = {}
-                if _accepts_keyword_arg(compact_with_result, "compaction_id"):
+                if accepts_keyword_arg(compact_with_result, "compaction_id"):
                     compact_kwargs["compaction_id"] = compaction_id
-                if _accepts_keyword_arg(compact_with_result, "trigger_reason"):
+                if accepts_keyword_arg(compact_with_result, "trigger_reason"):
                     compact_kwargs["trigger_reason"] = "gateway_auto_summarize"
-                if _accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
+                if accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_status
                 compaction_result = await compact_with_result(
                     session_key,

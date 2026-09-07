@@ -45,7 +45,14 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             if sheet_name not in wb.sheetnames or row is None or col is None:
                 continue
             ws = wb[sheet_name]
-            ws.cell(row=int(row), column=int(col), value=_coerce(value, bool(op.get("as_text"))))
+            cell = ws.cell(row=int(row), column=int(col))
+            # JSON null (value=None) should clear the cell (GH #1260).
+            # openpyxl's ws.cell(value=None) is a no-op — it only means
+            # "access the cell". Assign to cell.value directly instead.
+            if value is None and "value" in op:
+                cell.value = None
+            else:
+                cell.value = _coerce(value, bool(op.get("as_text")))
             applied += 1
         elif kind == "rename_sheet":
             old = op.get("old")

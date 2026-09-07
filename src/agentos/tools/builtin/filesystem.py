@@ -786,8 +786,7 @@ async def write_file(path: str, content: str, approval_id: str | None = None) ->
         p.write_text(content, encoding="utf-8")
 
     await loop.run_in_executor(None, _write)
-    if created:
-        record_workspace_file_write(p)
+    record_workspace_file_write(p)
     _notify_memory_source_write(p)
     _notify_bootstrap_source_write(p)
     return f"Written {len(content)} bytes to {p}"

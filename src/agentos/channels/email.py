@@ -503,6 +503,9 @@ class EmailChannel:
                 try:
                     parsed = self._fetch_one(client, uid)
                     if parsed is None:
+                        # Unparseable messages must still be marked seen so
+                        # the poller doesn't retry them on every cycle (GH #1209).
+                        self._mark_seen(client, uid)
                         continue
                     message = self._to_incoming(parsed)
                     # Acknowledge only after parsing and conversion return normally.

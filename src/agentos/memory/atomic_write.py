@@ -14,6 +14,7 @@ file or the new one, never a truncated one.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -60,7 +61,13 @@ def atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") ->
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
+        try:
+            existing_mode = stat.S_IMODE(os.stat(target).st_mode)
+        except OSError:
+            existing_mode = None
         os.replace(tmp_name, target)
+        if existing_mode is not None:
+            os.chmod(target, existing_mode)
     except BaseException:
         try:
             os.unlink(tmp_name)

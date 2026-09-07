@@ -2216,6 +2216,10 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
         raise RpcUnavailableError("No session manager available")
 
     max_messages = (params or {}).get("maxMessages", 20)
+    if not isinstance(max_messages, int) or isinstance(max_messages, bool):
+        raise ValueError("maxMessages must be a positive integer")
+    if max_messages < 1:
+        raise ValueError("maxMessages must be a positive integer")
     force = bool((params or {}).get("force", False))
 
     turn_runner = ctx.turn_runner

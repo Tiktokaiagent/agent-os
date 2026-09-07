@@ -2113,6 +2113,22 @@ class TestSessionsTruncate:
         assert ctx_with_sessions.session_manager.compact_calls == []
 
     @pytest.mark.asyncio
+    async def test_truncate_rejects_invalid_max_messages(
+        self, dispatcher, ctx_with_sessions, session
+    ):
+        """Issue #1371: non-integer or non-positive maxMessages should fail."""
+        for bad in (0, -1, True, "twenty"):
+            res = await dispatcher.dispatch(
+                "r1",
+                "sessions.truncate",
+                {"key": session.session_key, "maxMessages": bad},
+                ctx_with_sessions,
+            )
+            assert res.ok is False
+            assert res.error.code in ("INVALID_REQUEST", "BAD_REQUEST")
+            assert "maxMessages" in (res.error.message or "").lower()
+
+    @pytest.mark.asyncio
     async def test_truncate_refuses_without_covering_checkpoint(self, dispatcher, session):
         manager = FakeSessionManager([session])
         manager.transcript = [SimpleNamespace(content="message to preserve")]
@@ -2147,7 +2163,7 @@ class TestSessionsTruncate:
         res = await dispatcher.dispatch(
             "r1",
             "sessions.truncate",
-            {"key": session.session_key, "maxMessages": 0},
+            {"key": session.session_key, "maxMessages": 1},
             ctx,
         )
 

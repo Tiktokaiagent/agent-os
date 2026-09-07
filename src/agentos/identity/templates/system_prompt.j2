@@ -291,7 +291,7 @@ greetings like "hi". Always respond to direct user messages.
 - Shell: {{ runtime_info.shell }}
 {% endif -%}
 {% if runtime_info.get("workspace_dir") and prompt_mode != "minimal" -%}
-- Working directory: {{ runtime_info.workspace_dir }}
+- Working directory: {{ runtime_info.workspace_dir | safe }}
 {% endif %}
 
 {% endif -%}

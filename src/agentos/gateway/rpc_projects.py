@@ -127,7 +127,7 @@ async def _handle_projects_update(params: dict | None, ctx: RpcContext) -> dict:
         raise ValueError("params.name must be a string")
     if knowledge is not None and not isinstance(knowledge, str):
         raise ValueError("params.knowledge must be a string")
-    if expected is not None and not isinstance(expected, int):
+    if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
         raise ValueError("params.expectedUpdatedAt must be an integer timestamp")
 
     try:

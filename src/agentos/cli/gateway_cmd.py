@@ -168,7 +168,7 @@ def run_gateway(
             console.print(f"{entry['label']}: {entry['command']}")
         if config.config_path:
             console.print(
-                "Inspect onboarding: agentos onboard status"
+                f"Inspect onboarding: agentos onboard status "
                 f"{config_cli_arg(config.config_path)}"
             )
         raise typer.Exit(code=1) from exc

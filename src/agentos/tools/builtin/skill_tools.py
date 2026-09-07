@@ -800,7 +800,7 @@ def create_skill_tools(loader: SkillLoader) -> None:
             from agentos.skills.resources import expand_skill_placeholders
 
             if file_path:
-                normalized_path = file_path.strip().lstrip("./")
+                normalized_path = file_path.strip().removeprefix("./")
                 if normalized_path in {"", "SKILL.md"}:
                     if not skill.content:
                         return f"(Skill '{name}' has no body content)"

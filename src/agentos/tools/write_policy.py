@@ -37,7 +37,7 @@ def _candidate_strings(
     workspace: Path | None,
 ) -> tuple[str, ...]:
     candidates: list[str] = [
-        original_path.replace("\\", "/").lstrip("./"),
+        original_path.replace("\\", "/").removeprefix("./"),
         resolved.as_posix(),
     ]
     if workspace is not None:
@@ -72,9 +72,9 @@ def match_workspace_write_deny(
     candidates = _candidate_strings(resolved, original, workspace)
 
     for pattern in patterns:
-        normalized_pattern = pattern.replace("\\", "/").lstrip("./")
+        normalized_pattern = pattern.replace("\\", "/").removeprefix("./")
         for candidate in candidates:
-            normalized_candidate = candidate.replace("\\", "/").lstrip("./")
+            normalized_candidate = candidate.replace("\\", "/").removeprefix("./")
             if fnmatchcase(normalized_candidate, normalized_pattern) or fnmatchcase(
                 f"/{normalized_candidate}", normalized_pattern
             ):

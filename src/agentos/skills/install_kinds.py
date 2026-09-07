@@ -20,8 +20,9 @@ render a command the operator can copy.
 from __future__ import annotations
 
 import re
-import shlex
 from typing import TYPE_CHECKING
+
+from agentos.compat.shell_quoting import shell_quote
 
 if TYPE_CHECKING:
     from agentos.skills.types import SkillInstallSpec
@@ -160,8 +161,9 @@ def render_install_command(spec: SkillInstallSpec) -> str:
         if not _BIN_NAME_RE.match(bin_name or ""):
             return ""
         dest = f"~/.local/bin/{bin_name}"
-        return f"curl -fsSL -o {dest} {shlex.quote(url)} && chmod +x {dest}"
+        return f"curl -fsSL -o {dest} {shell_quote(url)} && chmod +x {dest}"
     try:
+        import shlex
         return shlex.join(build_install_argv(spec))
     except InstallSpecError:
         return ""

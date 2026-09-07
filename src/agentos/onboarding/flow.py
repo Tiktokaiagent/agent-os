@@ -6,12 +6,12 @@ import importlib
 import importlib.util
 import os
 import re
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from agentos.compat.shell_quoting import shell_quote
 from agentos.onboarding.channel_specs import (
     ChannelSetupField,
     ChannelSetupSpec,
@@ -205,7 +205,7 @@ def run_noninteractive_search_configure(
 def _config_cli_arg(config_path: str | Path | None) -> str:
     if config_path is None:
         return ""
-    return f" --config {shlex.quote(str(config_path))}"
+    return f" --config {shell_quote(str(config_path))}"
 
 
 def _first_blocking_setup_section(cfg: Any) -> str:

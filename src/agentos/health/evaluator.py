@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import shlex
 from typing import Any
 
+from agentos.compat.shell_quoting import shell_quote
 from agentos.health.control_ui import BUILD_CMD
 from agentos.health.model import FixStep, HealthFinding
 
@@ -39,7 +39,7 @@ def _int_from_payload(payload: dict[str, Any], *keys: str) -> int:
 
 
 def _command_arg(value: str) -> str:
-    return shlex.quote(value)
+    return shell_quote(value)
 
 
 def _diagnostic_incomplete(

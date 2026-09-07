@@ -787,8 +787,8 @@ class EmailChannel:
         """Mail one file back into ``thread_id`` as an attachment."""
 
         path = Path(file_path)
-        _check_file_size(path)
         try:
+            _check_file_size(path)
             payload = path.read_bytes()
             to_address, subject, in_reply_to, references = self._resolve_target(
                 OutgoingMessage(content="", reply_to=thread_id)

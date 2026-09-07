@@ -21,14 +21,23 @@ from openpyxl import load_workbook
 
 
 def _coerce(value: Any, as_text: bool) -> Any:
-    if as_text and isinstance(value, str) and value.startswith("="):
-        return "'" + value
+    if as_text:
+        return value
     if isinstance(value, str) and len(value) >= 19 and value[10] == "T":
         try:
             return datetime.fromisoformat(value)
         except ValueError:
             return value
     return value
+
+
+def _apply_cell_format(cell: Any, value: Any, as_text: bool) -> None:
+    """Configure cell formatting for as_text mode."""
+    if not as_text:
+        return
+    cell.number_format = "@"  # Force text format
+    if isinstance(value, str) and value.startswith("="):
+        cell.quotePrefix = True
 
 
 def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
@@ -45,7 +54,9 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             if sheet_name not in wb.sheetnames or row is None or col is None:
                 continue
             ws = wb[sheet_name]
-            ws.cell(row=int(row), column=int(col), value=_coerce(value, bool(op.get("as_text"))))
+            as_text = bool(op.get("as_text"))
+            cell = ws.cell(row=int(row), column=int(col), value=_coerce(value, as_text))
+            _apply_cell_format(cell, value, as_text)
             applied += 1
         elif kind == "rename_sheet":
             old = op.get("old")

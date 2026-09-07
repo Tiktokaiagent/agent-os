@@ -235,7 +235,15 @@ async def test_ac2_3_done_callback_logs_error_and_counter() -> None:
 
             def _reply_done(t: asyncio.Task[Any], _sk: str = session_key) -> None:
                 ifs.discard(t)
-                exc = t.exception() if not t.cancelled() else None
+                if t.cancelled():
+                    _fake_emit(
+                        "turn_cancellations_total",
+                        value=1,
+                        reason="reply_task_cancelled",
+                        session_key=_sk,
+                    )
+                    return
+                exc = t.exception()
                 if exc is not None:
                     mock_log.error(
                         "channel_dispatch.reply_task_error",
@@ -245,7 +253,7 @@ async def test_ac2_3_done_callback_logs_error_and_counter() -> None:
                         exc_info=exc,
                     )
                     _fake_emit(
-                        "turn_cancellations_total",
+                        "turn_errors_total",
                         value=1,
                         reason="reply_task_error",
                         session_key=_sk,
@@ -258,8 +266,11 @@ async def test_ac2_3_done_callback_logs_error_and_counter() -> None:
             await asyncio.sleep(0)
 
     assert mock_log.error.called, "log.error must be called on reply task exception"
-    assert "turn_cancellations_total" in metric_calls, (
-        "turn_cancellations_total counter must be incremented"
+    assert "turn_errors_total" in metric_calls, (
+        "turn_errors_total counter must be incremented"
+    )
+    assert "turn_cancellations_total" not in metric_calls, (
+        "turn_cancellations_total should not be incremented on errors"
     )
 
 

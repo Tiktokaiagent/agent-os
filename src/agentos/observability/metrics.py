@@ -262,6 +262,7 @@ class MetricsRegistry:
         self.register_gauge("agentos_queue_depth", "Pending task queue depth across all sessions")
         self.register_counter("in_flight_turns_total", "Cumulative turns entering execution")
         self.register_counter("turn_cancellations_total", "Cumulative turn cancellations")
+        self.register_counter("turn_errors_total", "Cumulative turn errors (reply task failures)")
         self.register_counter("queue_full_errors_total", "Cumulative queue full rejections")
 
         # Extended operational metrics

@@ -95,9 +95,28 @@ def _run_upgrade_subprocess(
             start_new_session=start_new_session,
         )
     except OSError as exc:
-        return UpgradeRunResult(
-            ok=False, timed_out=False, returncode=None, stdout="", stderr=str(exc)
-        )
+        stderr_msg = str(exc)
+        # On Windows, retry once after killing AgentOS/uv processes (#1365)
+        if sys.platform == "win32" and "Access is denied" in stderr_msg:
+            _kill_agentos_processes_windows()
+            try:
+                proc = subprocess.Popen(  # noqa: S603
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    start_new_session=start_new_session,
+                )
+            except OSError as exc2:
+                return UpgradeRunResult(
+                    ok=False, timed_out=False, returncode=None,
+                    stdout="", stderr=f"{stderr_msg}; retry: {exc2}",
+                )
+        else:
+            return UpgradeRunResult(
+                ok=False, timed_out=False, returncode=None, stdout="", stderr=stderr_msg,
+            )
 
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
@@ -138,6 +157,7 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
             )
         except (subprocess.TimeoutExpired, OSError):
             proc.kill()
+        _kill_agentos_processes_windows()
         return
     try:
         pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
@@ -153,6 +173,26 @@ def _kill_process_group(proc: subprocess.Popen[str]) -> None:
         time.sleep(0.2)
         if proc.poll() is not None:
             return
+
+
+def _kill_agentos_processes_windows() -> None:
+    """Kill running AgentOS/uv processes to release package file locks on Windows."""
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "agentos.exe"],
+            capture_output=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", "uv.exe"],
+            capture_output=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
 
 
 def _query_gateway_version(config_path: str | None) -> str | None:

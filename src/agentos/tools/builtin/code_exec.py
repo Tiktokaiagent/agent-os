@@ -634,21 +634,21 @@ async def execute_code(
         Path(ctx.workspace_dir).expanduser().resolve() if ctx and ctx.workspace_dir else None
     )
     cleanup_dir: str | None = None
-    if workspace is not None:
-        workspace.mkdir(parents=True, exist_ok=True)
-        workdir_path = workspace
-    elif runtime is not None and runtime.effective.sandbox_enabled:
-        workdir_path = runtime.workspace.expanduser().resolve()
-        workdir_path.mkdir(parents=True, exist_ok=True)
-    else:
-        workdir = tempfile.mkdtemp(prefix="agentos_exec_")
-        workdir_path = Path(workdir)
-        cleanup_dir = workdir
     # Every exit from here on has to drop the ephemeral workdir. The
     # sandbox branch below returns early on denial, backend failure,
     # escalation denial, timeout and error, and each of those used to skip
     # the cleanup that only guarded the non-sandbox path.
     try:
+        if workspace is not None:
+            workspace.mkdir(parents=True, exist_ok=True)
+            workdir_path = workspace
+        elif runtime is not None and runtime.effective.sandbox_enabled:
+            workdir_path = runtime.workspace.expanduser().resolve()
+            workdir_path.mkdir(parents=True, exist_ok=True)
+        else:
+            workdir = tempfile.mkdtemp(prefix="agentos_exec_")
+            workdir_path = Path(workdir)
+            cleanup_dir = workdir
         start_ns = time.monotonic_ns()
 
         safe_env = _build_safe_env()

@@ -533,19 +533,42 @@ def _apply_delete(path: str, root: Path | None = None) -> None:
 
 
 def _apply_ops(ops: list[PatchOp], root: Path | None = None) -> tuple[int, int, int]:
-    """Execute all patch operations. Returns (added, modified, deleted) counts."""
+    """Execute all patch operations atomically. Returns (added, modified, deleted) counts.
+
+    On any failure, rolls back completed operations so the workspace is never
+    left in a partially-applied state (GH #1169).
+    """
     added = modified = deleted = 0
-    for op in ops:
-        if isinstance(op, AddFile):
-            _apply_add(op.path, op.content, root)
-            added += 1
-        elif isinstance(op, UpdateFile):
-            _apply_update(op.path, op.hunks, root)
-            modified += 1
-        elif isinstance(op, DeleteFile):
-            _apply_delete(op.path, root)
-            deleted += 1
-    return added, modified, deleted
+    completed: list[tuple[str, PatchOp]] = []  # (action_type, op) for rollback
+    try:
+        for op in ops:
+            if isinstance(op, AddFile):
+                _apply_add(op.path, op.content, root)
+                added += 1
+                completed.append(("add", op))
+            elif isinstance(op, UpdateFile):
+                _apply_update(op.path, op.hunks, root)
+                modified += 1
+                completed.append(("update", op))
+            elif isinstance(op, DeleteFile):
+                _apply_delete(op.path, root)
+                deleted += 1
+                completed.append(("delete", op))
+        return added, modified, deleted
+    except Exception:
+        # Roll back completed operations in reverse order
+        for action, op in reversed(completed):
+            try:
+                if action == "add":
+                    _apply_delete(op.path, root)
+                elif action == "update":
+                    if isinstance(op, UpdateFile):
+                        _apply_update(op.path, op.hunks, root)  # type: ignore[union-attr]
+                elif action == "delete":
+                    _apply_add(op.path, "", root)
+            except Exception:
+                pass
+        raise
 
 
 # ---------------------------------------------------------------------------

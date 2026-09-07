@@ -1053,7 +1053,12 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         nonlocal message_text, persisted_entry, fresh_user_session
         get_transcript = getattr(ctx.session_manager, "get_transcript", None)
         if callable(get_transcript):
-            fresh_user_session = not bool(await get_transcript(key))
+            # Only one row is needed to test for emptiness — reading the full
+            # history on every user message is O(n) and slows as chat grows.
+            kw = {}
+            if _accepts_keyword_arg(get_transcript, "limit"):
+                kw["limit"] = 1
+            fresh_user_session = not bool(await get_transcript(key, **kw))
         if raw_attachments:
             from agentos.gateway.transcripts import (
                 build_transcript_attachment_envelope,

@@ -167,9 +167,21 @@ def _parse_path_prompt(command: str, prefix: str, usage: str) -> tuple[Path, str
         token = rest[1:end]
         prompt = rest[end + 1 :].strip()
     else:
-        parts = rest.split(None, 1)
-        token = parts[0]
-        prompt = parts[1] if len(parts) > 1 else ""
+        # Progressive path resolution: unquoted paths may contain spaces
+        # (GH #1228). Try longer prefixes until one exists on disk.
+        tokens = rest.split()
+        prompt = ""
+        for split_at in range(len(tokens), 0, -1):
+            candidate = " ".join(tokens[:split_at])
+            p = Path(candidate).expanduser()
+            if p.exists():
+                token = candidate
+                prompt = " ".join(tokens[split_at:])
+                break
+        else:
+            # No path-matched prefix — fall back to first token as path
+            token = tokens[0]
+            prompt = " ".join(tokens[1:])
 
     if not token:
         raise ValueError(usage)

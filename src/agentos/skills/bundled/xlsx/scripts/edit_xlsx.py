@@ -21,8 +21,11 @@ from openpyxl import load_workbook
 
 
 def _coerce(value: Any, as_text: bool) -> Any:
-    if as_text and isinstance(value, str) and value.startswith("="):
-        return "'" + value
+    # as_text=true: store the literal string, no formula/datetime coercion
+    if as_text and isinstance(value, str):
+        return value
+    if isinstance(value, str) and value.startswith("="):
+        return value  # openpyxl will treat as formula
     if isinstance(value, str) and len(value) >= 19 and value[10] == "T":
         try:
             return datetime.fromisoformat(value)
@@ -45,7 +48,16 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             if sheet_name not in wb.sheetnames or row is None or col is None:
                 continue
             ws = wb[sheet_name]
-            ws.cell(row=int(row), column=int(col), value=_coerce(value, bool(op.get("as_text"))))
+            coerced = _coerce(value, bool(op.get("as_text")))
+            cell = ws.cell(row=int(row), column=int(col))
+            cell.value = coerced
+            # as_text=true with a string: force text type and set
+            # quotePrefix for formula-like strings (GH #1358).
+            as_text_flag = bool(op.get("as_text"))
+            if as_text_flag and isinstance(value, str):
+                if isinstance(coerced, str) and coerced.startswith("="):
+                    cell.quotePrefix = True
+                cell.data_type = "s"
             applied += 1
         elif kind == "rename_sheet":
             old = op.get("old")

@@ -339,7 +339,12 @@ _FD_DUP_PATTERN = re.compile(r"\d*>&\s*(?:\d+-?|-)(?=$|[\s|&;<>)])")
 # ``n>>``, ``&>``, ``&>>``, ``>&file`` and the noclobber override ``>|``. The
 # operator is deliberately *not* anchored to a word boundary — ``echo x>file`` is
 # valid shell and must be caught just like ``echo x > file``.
-_REDIRECTION_PATTERN = re.compile(r"(?:&>{1,2}|\d*>{1,2}&?)\|?\s*(['\"]?)([^'\"\s|&;<>()]+)\1")
+# Quoted redirect targets (support spaces in paths, GH #1230)
+_QUOTED_REDIR_DQ = re.compile(r'(?:&>{1,2}|\d*>{1,2}&?)\|?\s*"([^"]+)"')
+_QUOTED_REDIR_SQ = re.compile(r"(?:&>{1,2}|\d*>{1,2}&?)\|?\s*'([^']+)'")
+# Unquoted redirect targets (no spaces allowed in the match)
+_UNQUOTED_REDIR = re.compile(r'(?:&>{1,2}|\d*>{1,2}&?)\|?\s*([^\s"\'|&;<>()]+)')
+_REDIRECTION_PATTERN = _UNQUOTED_REDIR
 
 # ``tee`` is the other write primitive this parser covers, and it needs the same
 # treatment as the redirection operators: ``echo x|tee /etc/passwd`` is valid
@@ -348,15 +353,26 @@ _REDIRECTION_PATTERN = re.compile(r"(?:&>{1,2}|\d*>{1,2}&?)\|?\s*(['\"]?)([^'\"\
 # fully qualified ``/usr/bin/tee``. Options may be short (``-a``), long
 # (``--append``) or long with a value (``--output-error=warn``); all of them are
 # skipped so the first non-option word is the real target.
-_TEE_PATTERN = re.compile(
-    r"(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+(['\"]?)([^'\"\s|&;]+)\1"
-)
+_QUOTED_TEE_DQ = re.compile(r'(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+"([^"]+)"')
+_QUOTED_TEE_SQ = re.compile(r"(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+'([^']+)'")
+# For unquoted tee targets, match until whitespace or pipe
+_UNQUOTED_TEE = re.compile(r'(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+([^\s"\']+)')
+_TEE_PATTERN = _UNQUOTED_TEE
 
 
 def _shell_write_targets(command: str) -> list[str]:
     scanned = _FD_DUP_PATTERN.sub(" ", command)
-    targets: list[str] = [match.group(2) for match in _REDIRECTION_PATTERN.finditer(scanned)]
-    targets.extend(match.group(2) for match in _TEE_PATTERN.finditer(scanned))
+    targets: list[str] = []
+    # Quoted redirects (support spaces in paths)
+    targets.extend(m.group(1) for m in _QUOTED_REDIR_DQ.finditer(scanned))
+    targets.extend(m.group(1) for m in _QUOTED_REDIR_SQ.finditer(scanned))
+    # Unquoted redirects
+    targets.extend(m.group(1) for m in _UNQUOTED_REDIR.finditer(scanned))
+    # Quoted tee targets
+    targets.extend(m.group(1) for m in _QUOTED_TEE_DQ.finditer(scanned))
+    targets.extend(m.group(1) for m in _QUOTED_TEE_SQ.finditer(scanned))
+    # Unquoted tee targets
+    targets.extend(m.group(1) for m in _UNQUOTED_TEE.finditer(scanned))
     return targets
 
 

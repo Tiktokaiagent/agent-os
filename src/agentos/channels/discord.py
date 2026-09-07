@@ -788,12 +788,28 @@ class DiscordChannel:
         channel_id = str(data.get("channel_id") or "unknown")
 
         # Build content from command name and options
+        # Discord option types: 1=SUB_COMMAND, 2=SUB_COMMAND_GROUP, 3=STRING,
+        # 4=INTEGER, 5=BOOLEAN, 10=NUMBER. Types 1/2 nest further options
+        # instead of carrying a value. Traverse recursively.
+        def _flatten_options(opts: list[dict]) -> list[str]:
+            parts: list[str] = []
+            for opt in opts:
+                if not isinstance(opt, dict):
+                    continue
+                opt_type = opt.get("type")
+                if opt_type in (1, 2):  # SUB_COMMAND or SUB_COMMAND_GROUP
+                    parts.append(str(opt.get("name", "")))
+                    nested = opt.get("options")
+                    if isinstance(nested, list):
+                        parts.extend(_flatten_options(nested))
+                elif "value" in opt:
+                    parts.append(str(opt["value"]))
+            return parts
+
         raw_options = interaction_data.get("options")
-        options = raw_options if isinstance(raw_options, list) else []
-        option_parts = [
-            opt.get("value", "") for opt in options if isinstance(opt, dict) and opt.get("value")
-        ]
-        content = f"/{command_name} {' '.join(str(v) for v in option_parts)}".strip()
+        opts = raw_options if isinstance(raw_options, list) else []
+        option_parts = _flatten_options(opts)
+        content = f"/{command_name} {' '.join(option_parts)}".strip()
         channel_type = self._channel_type(data.get("channel_type"))
         thread_id = self._native_thread_id(data, channel_type)
         conversation_kind = self._conversation_kind(data, channel_type, thread_id)

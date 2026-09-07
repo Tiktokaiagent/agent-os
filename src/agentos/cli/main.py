@@ -91,6 +91,20 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
+
+@app.callback()
+def _main(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", help="Show version and exit."),
+) -> None:
+    """AgentOS CLI."""
+    if version:
+        from agentos import __version__
+
+        typer.echo(f"agentos {__version__}")
+        raise typer.Exit()
+
+
 # ── Sub-apps ─────────────────────────────────────────────────────────────────
 
 app.add_typer(auth_app, name="auth")

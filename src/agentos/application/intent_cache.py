@@ -187,38 +187,53 @@ def _extract_rm_targets(command: str) -> list[tuple[str, frozenset[str]]]:
     """Pull every ``rm`` argument out, tagged with that invocation's flags.
 
     Handles ``rm a b c``, ``rm -rf /a /b``, quoted paths, and stops at shell
-    separators. Uses ``finditer`` so ``rm foo; rm -rf /bar`` yields targets
-    from both invocations independently — and each keeps its own capability
-    set, so the ``-rf`` on the second does not leak onto the first. Does not
-    try to be a full shell parser — falls back to whitespace split on shlex
-    errors (unbalanced quotes).
-    """
-    # Match each ``rm`` invocation, stopping at shell separators.
-    # ``[^;\n&|]*`` captures everything from ``rm`` up to the next separator
-    # or end-of-expression, so each ``rm`` is tokenized independently.
-    pattern = re.compile(r"\brm\b([^;\n&|]*)")
-    matches = list(pattern.finditer(command))
-    if not matches:
-        return []
+    separators. Uses ``shlex.split`` per segment so ``rm`` inside a quoted
+    argument to another command (e.g. ``grep -rn "rm" /etc``) is not mistaken
+    for a delete intent. Each shell segment is checked independently so
+    ``rm foo; rm -rf /bar`` yields targets from both invocations.
 
+    Does not try to be a full shell parser — falls back to whitespace split
+    on shlex errors (unbalanced quotes).
+    """
+    segments = re.split(r"[;&\n|]+", command)
     targets: list[tuple[str, frozenset[str]]] = []
     seen: set[tuple[str, frozenset[str]]] = set()
 
-    for match in matches:
-        tail = match.group(1).strip()
-        if not tail:
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
             continue
 
-        token_sets: list[list[str]] = []
         try:
-            token_sets.append(shlex.split(tail))
+            tokens = shlex.split(segment)
         except ValueError:
-            token_sets.append(tail.split())
-        if "\\" in tail and (os.name == "nt" or re.search(r"(?:^|\s)\\[^\s]", tail)):
+            tokens = segment.split()
+        if not tokens:
+            continue
+
+        # Skip leading variable assignments (e.g., ``FOO=bar rm /tmp``)
+        cmd_idx = 0
+        while cmd_idx < len(tokens) and "=" in tokens[cmd_idx] and not tokens[cmd_idx].startswith("-"):
+            cmd_idx += 1
+
+        if cmd_idx >= len(tokens) or tokens[cmd_idx] != "rm":
+            continue
+
+        tail_tokens = tokens[cmd_idx + 1:]
+        if not tail_tokens:
+            continue
+
+        token_sets: list[list[str]] = [tail_tokens]
+        if "\\" in segment and (os.name == "nt" or re.search(r"(?:^|\s)\\[^\s]", segment)):
             try:
-                token_sets.append(shlex.split(tail, posix=False))
+                win_tokens = shlex.split(segment, posix=False)
             except ValueError:
-                token_sets.append(tail.split())
+                win_tokens = segment.split()
+            cmd_idx2 = 0
+            while cmd_idx2 < len(win_tokens) and "=" in win_tokens[cmd_idx2] and not win_tokens[cmd_idx2].startswith("-"):
+                cmd_idx2 += 1
+            if cmd_idx2 < len(win_tokens) and win_tokens[cmd_idx2] == "rm":
+                token_sets.append(win_tokens[cmd_idx2 + 1:])
 
         for tokens in token_sets:
             capabilities = _rm_invocation_capabilities(tokens)

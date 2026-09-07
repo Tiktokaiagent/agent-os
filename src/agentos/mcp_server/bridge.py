@@ -157,10 +157,14 @@ class AgentOSMCPBridge:
             )
             max_events = _clamp_limit(max_events, _MAX_EVENTS_WAIT_EVENTS)
             timeout_ms = min(max(0, timeout_ms), _MAX_EVENTS_WAIT_TIMEOUT_MS)
-            deadline = time.monotonic() + timeout_ms / 1000
+            max_wait = timeout_ms / 1000
+            deadline = time.monotonic() + max_wait
 
             while len(events) < max_events:
-                remaining = deadline - time.monotonic()
+                # Clamp to [0, max_wait] to protect against floating-point
+                # rounding where deadline - now marginally exceeds the budget
+                # (GH #1264).
+                remaining = min(max_wait, max(0.0, deadline - time.monotonic()))
                 if remaining <= 0:
                     break
                 try:

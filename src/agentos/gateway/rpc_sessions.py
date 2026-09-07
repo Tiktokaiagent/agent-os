@@ -2401,13 +2401,12 @@ async def _handle_sessions_preview(params: dict | None, ctx: RpcContext) -> dict
         )
         last_msg = ""
         try:
-            transcript = await storage.get_transcript(s.session_id, limit=-1)
-            if transcript:
-                # Find the last user or assistant message for preview
-                for entry in reversed(transcript):
-                    if entry.role in ("user", "assistant") and entry.content:
-                        last_msg = entry.content[:120]
-                        break
+            # Only fetch 1 recent entry instead of full transcript (GH #1186).
+            recent = await storage.get_recent_transcript(s.session_id, n=1)
+            if recent:
+                entry = recent[-1]
+                if entry.role in ("user", "assistant") and entry.content:
+                    last_msg = entry.content[:120]
         except Exception:
             pass
         previews.append(

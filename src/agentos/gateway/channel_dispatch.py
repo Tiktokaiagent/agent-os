@@ -189,7 +189,8 @@ class _ChannelInFlightSet:
 
     async def cancel_all(self) -> None:
         """Cancel every in-flight task and await completion (for shutdown)."""
-        tasks = list(self._tasks)
+        # Filter out non-task reservation tokens (GH #1172).
+        tasks = [t for t in self._tasks if isinstance(t, asyncio.Task)]
         for t in tasks:
             t.cancel()
         if tasks:

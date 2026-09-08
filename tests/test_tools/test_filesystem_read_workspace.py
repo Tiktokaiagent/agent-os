@@ -410,3 +410,47 @@ async def test_list_dir_broken_symlink_does_not_crash(tmp_path: Path) -> None:
     assert "[file] valid.txt" in output
     assert "broken_link.txt" in output
 
+
+
+def test_read_xlsx_handles_empty_row_gaps() -> None:
+    """Empty rows in xlsx must not skew row numbering (#1149)."""
+    from agentos.tools.builtin.filesystem import _read_xlsx_worksheet
+
+    # Simulate XML with row 1, row 3 (no row 2 element)
+    xml = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Row1</t></is></c>
+    </row>
+    <row r="3">
+      <c r="A3" t="inlineStr"><is><t>Row3</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>'''
+    rows = _read_xlsx_worksheet(xml, [])
+    assert len(rows) == 3, f"Expected 3 rows, got {len(rows)}"
+    assert rows[0] == ["Row1"]
+    assert rows[1] == [], f"Row 2 should be empty, got {rows[1]}"
+    assert rows[2] == ["Row3"], f"Row 3 should be 'Row3', got {rows[2]}"
+
+
+def test_read_xlsx_with_adjacent_rows_is_unchanged() -> None:
+    """Adjacent rows still work correctly."""
+    from agentos.tools.builtin.filesystem import _read_xlsx_worksheet
+
+    xml = b'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>A</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>B</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>'''
+    rows = _read_xlsx_worksheet(xml, [])
+    assert len(rows) == 2
+    assert rows[0] == ["A"]
+    assert rows[1] == ["B"]

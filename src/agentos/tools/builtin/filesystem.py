@@ -665,6 +665,14 @@ def _read_xlsx_worksheet(raw_xml: bytes, shared_strings: list[str]) -> list[list
     root = ET.fromstring(raw_xml)
     rows: list[list[str]] = []
     for row_el in root.findall(f".//{{{_XLSX_MAIN_NS}}}row"):
+        # Use the row's ``r`` attribute (1-indexed actual Excel row number) to
+        # detect gaps left by empty rows that have no <row> element in the XML.
+        # Insert padding for missing rows so row-number alignment is preserved
+        # and pagination (offset/limit) maps correctly (issue #1149).
+        row_num = int(row_el.attrib.get("r", str(len(rows) + 1)))
+        while len(rows) < row_num - 1:
+            rows.append([])  # empty row padding
+
         row: list[str] = []
         for cell_el in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
             column_index = _xlsx_column_index(cell_el.attrib.get("r", ""))

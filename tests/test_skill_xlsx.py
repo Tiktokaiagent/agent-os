@@ -148,3 +148,31 @@ def test_inspect_xlsx_creates_parent_directory(
     monkeypatch.setattr(sys, "argv", ["inspect_xlsx.py", str(src), "--out", str(out)])
     assert inspect_xlsx.main() == 0
     assert out.is_file()
+
+
+def test_create_xlsx_string_merged_ranges(tmp_path: Path) -> None:
+    """String-form merged ranges must not be silently dropped (#1401)."""
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        import create_xlsx
+        import inspect_xlsx
+    finally:
+        sys.path.pop(0)
+
+    spec = {
+        "sheets": [
+            {
+                "name": "Sheet1",
+                "rows": [[1, 2], [3, 4]],
+                "merged": ["A1:B1"],
+            }
+        ]
+    }
+    src = tmp_path / "merged.xlsx"
+    create_xlsx.build(spec).save(str(src))
+    assert src.exists()
+
+    inspected = inspect_xlsx.inspect(src, data_only=False)
+    sheet = next(s for s in inspected["sheets"] if s["name"] == "Sheet1")
+    # The merged cell range must be present in the output
+    assert any("A1:B1" in r for r in sheet["merged"]), f"Merged ranges: {sheet['merged']}"

@@ -54,7 +54,9 @@ def build(spec: dict[str, Any]) -> Workbook:
             ws.append([_coerce(v) for v in row])
 
         for merged in sheet_spec.get("merged") or []:
-            if isinstance(merged, dict) and "range" in merged:
+            if isinstance(merged, str):
+                ws.merge_cells(merged)
+            elif isinstance(merged, dict) and "range" in merged:
                 ws.merge_cells(str(merged["range"]))
 
         freeze = sheet_spec.get("freeze")

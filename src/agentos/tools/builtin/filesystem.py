@@ -779,7 +779,6 @@ async def write_file(path: str, content: str, approval_id: str | None = None) ->
         return json.dumps(approval)
 
     loop = asyncio.get_running_loop()
-    created = not p.exists()
 
     def _write() -> None:
         p.parent.mkdir(parents=True, exist_ok=True)

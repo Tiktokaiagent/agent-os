@@ -354,7 +354,9 @@ _REDIRECTION_PATTERN = _UNQUOTED_REDIR
 # (``--append``) or long with a value (``--output-error=warn``); all of them are
 # skipped so the first non-option word is the real target.
 _QUOTED_TEE_DQ = re.compile(r'(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+"([^"]+)"')
-_QUOTED_TEE_SQ = re.compile(r"(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+'([^']+)'")
+_QUOTED_TEE_SQ = re.compile(
+    r"(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+'([^']+)'"
+)
 # For unquoted tee targets, match until whitespace or pipe
 _UNQUOTED_TEE = re.compile(r'(?<![\w-])tee(?:\s+-{1,2}[A-Za-z][\w-]*(?:=[^\s|&;]+)?)*\s+([^\s"\']+)')
 _TEE_PATTERN = _UNQUOTED_TEE

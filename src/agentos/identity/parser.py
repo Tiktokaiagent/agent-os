@@ -21,9 +21,15 @@ _KNOWN_IDENTITY_FIELDS = frozenset(["name", "emoji", "creature", "vibe", "theme"
 
 
 def _strip_markdown_inline(text: str) -> str:
-    """Strip inline markdown formatting: bold, italic, code."""
+    """Strip inline markdown formatting: bold, italic, code.
+
+    Per CommonMark, underscore-delimited emphasis requires word-boundary
+    flanking: ``_`` is only a delimiter when NOT surrounded by word
+    characters on both sides.  A bare ``_`` inside ``snake_case`` or
+    ``my_agent_name`` must be preserved (issue #1428).
+    """
     text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
-    text = re.sub(r"_{1,3}(.*?)_{1,3}", r"\1", text)
+    text = re.sub(r"(?<!\w)_{1,3}(?=\S)(.+?)(?<=\S)_{1,3}(?!\w)", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     return text
 

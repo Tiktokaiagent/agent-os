@@ -159,12 +159,16 @@ def _resolve_download_limit_bytes() -> int:
 
 
 def _resolve_effective_max_chars(max_chars: int | None) -> int | None:
-    """Resolve explicit max_chars or the default cap for omitted values."""
+    """Resolve explicit max_chars or the default cap for omitted values.
+
+    Values below 100 are clamped to 100, not silently disabled (issue
+    #1400: returning None allowed the caller to bypass all truncation,
+    returning far more data than the user requested).
+    """
     max_allowed = _active_run_budget_policy().max_single_fetch_chars
     if max_chars is not None:
-        if max_chars < 100:
-            return None
-        return min(max_chars, max_allowed) if max_allowed is not None else max_chars
+        clamped = max(max_chars, 100)
+        return min(clamped, max_allowed) if max_allowed is not None else clamped
     default = _resolve_default_max_chars()
     return min(default, max_allowed) if max_allowed is not None else default
 

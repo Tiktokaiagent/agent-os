@@ -737,12 +737,19 @@ def _format_spreadsheet(
     limit: int,
 ) -> str:
     parts = [f"Workbook: {path.name}"]
+    # Normalize to a 1-indexed offset: offset=0 / negative offsets mean
+    # "start from the first row" and must display as row 1, not row 0
+    # (issue #1402).
+    offset = max(1, offset)
     start = max(0, offset - 1)
     for sheet_name, rows in sheets:
         width = max((len(row) for row in rows), default=0)
         parts.append("")
         parts.append(f"Sheet: {sheet_name} ({len(rows)} rows x {width} columns)")
         selected = rows[start : start + limit]
+        if not selected:
+            parts.append(f"(No rows to show at offset {offset} — sheet has {len(rows)} rows.)")
+            continue
         for idx, row in enumerate(selected, start=start + 1):
             parts.append(f"{idx}\t" + "\t".join(row))
         if start + limit < len(rows):

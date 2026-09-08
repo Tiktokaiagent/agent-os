@@ -302,3 +302,35 @@ def test_redact_terminal_output_still_masks_a_short_header_value() -> None:
     out = redact_terminal_output("Authorization: Bearer abc123def45", "curl -v https://x")
 
     assert "abc123def45" not in out
+
+
+def test_format_spreadsheet_offsets_display_row_1_not_row_0() -> None:
+    """offset=0 must display 'Showing rows 1-N', not 'Showing rows 0-N' (#1402)."""
+    from pathlib import Path
+
+    from agentos.tools.builtin.filesystem import _format_spreadsheet
+
+    p = Path("test.xlsx")
+    sheets = [("Sheet1", [["a"], ["b"], ["c"], ["d"], ["e"]])]
+    result = _format_spreadsheet(path=p, sheets=sheets, offset=0, limit=3)
+    assert "Showing rows 1" in result, f"Got: {result}"
+    assert "Showing rows 0" not in result
+
+    result = _format_spreadsheet(path=p, sheets=sheets, offset=2, limit=2)
+    assert "Showing rows 2" in result
+
+
+def test_format_spreadsheet_handles_offset_past_sheet_end_gracefully() -> None:
+    """Offset past the end of a sheet must show an informative message (#1402)."""
+    from pathlib import Path
+
+    from agentos.tools.builtin.filesystem import _format_spreadsheet
+
+    sheets = [
+        ("Sheet1", [["a"], ["b"]] * 50),
+        ("Sheet2", [["x"], ["y"], ["z"]]),
+    ]
+    result = _format_spreadsheet(path=Path("multi.xlsx"), sheets=sheets, offset=25, limit=10)
+    # Sheet2 only has 3 rows, offset 25 is past the end
+    assert "No rows to show" in result
+    assert "Sheet2" in result

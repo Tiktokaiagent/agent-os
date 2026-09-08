@@ -650,13 +650,17 @@ async def _terminate_bg_session(session: _BgSession) -> None:
 
 
 async def _wait_exec_process(proc: Any, timeout: float) -> bool:
-    deadline = asyncio.get_running_loop().time() + max(0.0, timeout)
-    while proc.returncode is None:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return proc.returncode is not None
-        await asyncio.sleep(min(0.01, remaining))
-    return True
+    """Wait for subprocess *proc* to finish within *timeout* seconds.
+
+    Uses ``proc.wait()`` (event-driven via the subprocess watcher) instead of
+    a busy-spin sleep loop, avoiding thousands of unnecessary coroutine
+    wake-ups during long-running commands (issue #1470).
+    """
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return proc.returncode is not None
 
 
 def _signal_exec_process_tree(proc: Any, sig: signal.Signals) -> bool:

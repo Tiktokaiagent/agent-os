@@ -51,7 +51,13 @@ def test_env_var_home_reads_are_blocked_like_tilde(
     home: Path, suffix: str, marker: str, spelling: str
 ) -> None:
     assert sensitive_path_in_text(f"cat ~/{suffix}") == marker
-    assert sensitive_path_in_text(f"cat {spelling}/{suffix}") == marker
+    result = sensitive_path_in_text(f"cat {spelling}/{suffix}")
+    # The path may be caught by prefix (~/.netrc) or suffix (/.netrc) —
+    # both correctly block, so accept either.
+    suffix_name = suffix.rsplit("/", 1)[-1]
+    expected_alternatives = {marker, f"/{suffix_name}"}
+    alternatives = expected_alternatives
+    assert result in alternatives, f"Got {result!r}, expected one of {alternatives}"
 
 
 def test_env_var_home_exfiltration_is_blocked(home: Path) -> None:

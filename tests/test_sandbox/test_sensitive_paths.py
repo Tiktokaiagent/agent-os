@@ -51,13 +51,10 @@ def test_active_workspace_exception_keeps_leaf_secret_blocks() -> None:
         "/.env*",
     }
     assert sensitive_path_marker(str(workspace / "id_rsa"), workspace=workspace) == "/id_rsa"
-    assert (
-        sensitive_path_in_text(
-            f"cat {workspace / '.env.local'}",
-            workspace=workspace,
-        )
-        in {"/.env.local", "/.env*"}
-    )
+    assert sensitive_path_in_text(
+        f"cat {workspace / '.env.local'}",
+        workspace=workspace,
+    ) in {"/.env.local", "/.env*"}
 
 
 def test_sensitive_command_targets_honor_active_workspace_exception() -> None:
@@ -70,13 +67,10 @@ def test_sensitive_command_targets_honor_active_workspace_exception() -> None:
         )
         is None
     )
-    assert (
-        sensitive_target_in_command(
-            f"rm {workspace / '.env'}",
-            workspace=workspace,
-        )
-        in {"/.env", "/.env*"}
-    )
+    assert sensitive_target_in_command(
+        f"rm {workspace / '.env'}",
+        workspace=workspace,
+    ) in {"/.env", "/.env*"}
 
 
 def test_windows_rooted_workspace_targets_keep_leaf_secret_blocks() -> None:
@@ -89,23 +83,17 @@ def test_windows_rooted_workspace_targets_keep_leaf_secret_blocks() -> None:
         )
         is None
     )
-    assert (
-        sensitive_target_in_command(
-            r"rm \root\.agentos\workspace\.env",
-            workspace=workspace,
-        )
-        in {"/.env", "/.env*"}
-    )
+    assert sensitive_target_in_command(
+        r"rm \root\.agentos\workspace\.env",
+        workspace=workspace,
+    ) in {"/.env", "/.env*"}
 
 
 def test_posix_sensitive_paths_stay_blocked_on_windows_runners() -> None:
     workspace = Path("/root/.agentos/workspace")
 
     assert sensitive_path_in_text("cat /dev/sda 2>/dev/null") == "/dev"
-    assert (
-        sensitive_path_in_text("cat /root/.ssh/id_rsa", workspace=workspace)
-        == "~/.ssh"
-    )
+    assert sensitive_path_in_text("cat /root/.ssh/id_rsa", workspace=workspace) == "~/.ssh"
 
 
 def test_every_rm_in_a_compound_command_is_checked() -> None:
@@ -349,6 +337,63 @@ def test_a_file_merely_named_vault_token_is_not_sensitive(path: str) -> None:
         return
 
     assert is_sensitive_path(path) is None
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (".git-credentials", "~/.git-credentials"),
+        (".pgpass", "~/.pgpass"),
+        (".dockercfg", "~/.dockercfg"),
+        (".htpasswd", "~/.htpasswd"),
+    ],
+)
+def test_home_credential_files_missing_from_issue_981_are_sensitive(
+    relative: str,
+    marker: str,
+) -> None:
+    """Issue #981: files the host uses to store plaintext credentials that
+    were missing from _SENSITIVE_PREFIXES. git-credentials holds GitHub
+    tokens in plaintext, pgpass holds PostgreSQL passwords, dockercfg holds
+    Docker registry credentials, and htpasswd holds basic auth secrets."""
+    target = Path.home()
+    for part in relative.split("/"):
+        target = target / part
+    assert is_sensitive_path(str(target)) == marker
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/var/deploy/.git-credentials",
+        "/opt/db/.pgpass",
+        "/tmp/.dockercfg",
+        "/home/deploy/.htpasswd",
+    ],
+)
+def test_credential_files_outside_home_match_suffix_entries(path: str) -> None:
+    """Issue #981: when credential files land outside home, the suffix
+    entries catch them. Backslash-normalized spellings also match on all
+    platforms."""
+    # Extract suffix from the expected pattern
+    name = path.rsplit("/", 1)[-1]
+    assert is_sensitive_path(path) == f"/{name}"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/.netrc",
+        "/tmp/.npmrc",
+        "/tmp/.pypirc",
+    ],
+)
+def test_suffix_only_credential_files_are_sensitive_everywhere(path: str) -> None:
+    """Issue #981: .netrc, .npmrc, and .pypirc had entry-suffix protection
+    through their home prefix already, but the suffix entries were also
+    missing so copies anywhere on the filesystem were unprotected."""
+    name = path.rsplit("/", 1)[-1]
+    assert is_sensitive_path(path) == f"/{name}"
 
 
 def test_new_credential_paths_are_caught_in_free_form_text() -> None:

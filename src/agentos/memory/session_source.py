@@ -59,6 +59,14 @@ def _format_timestamp(ms: int | None) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
 
 
+def build_session_source_path(session: Any) -> str:
+    """Return the derived document path for a session without rendering it."""
+    agent_id = _normalize_agent_id(getattr(session, "agent_id", None) or "main")
+    safe_agent = _safe_segment(agent_id, fallback="main")
+    safe_session_id = _safe_segment(session.session_id, fallback="session")
+    return f"sessions/{safe_agent}/{safe_session_id}.md"
+
+
 def build_session_source_document(
     session: Any,
     entries: list[Any],
@@ -130,13 +138,35 @@ class SessionSourceIndexer:
         indexed = 0
         skipped = 0
 
+        # Batch-load stored mtimes for every candidate session path so we
+        # only read transcripts for sessions whose document actually changed.
+        # Reading the full transcript of every session on every sync is
+        # wasteful: with max_sessions=1000 that is thousands of full reads
+        # per run even when nothing changed (issue #1432).
+        path_by_session = {
+            session.session_id: build_session_source_path(session)
+            for session in sessions
+        }
+        stored_mtimes = await self._store.get_file_mtimes(list(path_by_session.values()))
+
         for session in sessions:
+            path = path_by_session[session.session_id]
+            expected_paths.add(path)
+            session_mtime = (getattr(session, "updated_at", None) or 0) / 1000
+            if (
+                not force
+                and stored_mtimes.get(path) is not None
+                and abs(stored_mtimes[path] - session_mtime) < 1e-9
+            ):
+                # Document unchanged since last index; skip the transcript read.
+                skipped += 1
+                continue
+
             entries = await self._storage.get_transcript(session.session_id)
             if not entries:
                 skipped += 1
                 continue
             document = build_session_source_document(session, entries)
-            expected_paths.add(document.path)
             chunks = await self._store.index_file(
                 path=document.path,
                 content=document.content,

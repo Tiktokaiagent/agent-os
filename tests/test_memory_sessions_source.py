@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -265,3 +266,70 @@ async def test_memory_search_tool_outputs_sessions_source(tmp_path):
     assert retriever.opts.source is MemorySource.sessions
     assert "source: sessions" in output
     assert "sessions/main/session-1.md" in output
+
+
+@pytest.mark.asyncio
+async def test_session_source_indexer_skips_transcript_read_for_unchanged_sessions(tmp_path):
+    """Unchanged sessions must not have their full transcript re-read (#1432)."""
+    storage = SessionStorage(":memory:")
+    await storage.connect()
+    store = LongTermMemoryStore(tmp_path / "memory.db")
+    await store.initialize()
+    try:
+        session = SessionNode(
+            session_key="direct:user:thread",
+            session_id="session-1",
+            agent_id="main",
+            updated_at=1_700_000_000_000,
+        )
+        await storage.upsert_session(session)
+        await storage.append_transcript_entry(
+            TranscriptEntry(
+                session_id=session.session_id,
+                session_key=session.session_key,
+                role="user",
+                content="The migration keyword is cerulean.",
+                created_at=1_700_000_000_000,
+            )
+        )
+
+        indexer = SessionSourceIndexer(storage=storage, store=store, agent_id="main")
+
+        # First sync indexes the document.
+        result = await indexer.sync(force=True)
+        assert result.indexed == 1
+
+        # Second sync: transcript unchanged → must NOT re-read the transcript.
+        reads: list[str] = []
+        original = storage.get_transcript
+
+        async def counting_get_transcript(session_id: str) -> list[Any]:
+            reads.append(session_id)
+            return await original(session_id)
+
+        storage.get_transcript = counting_get_transcript  # type: ignore[method-assign]
+        result = await indexer.sync()
+        assert result.indexed == 0
+        assert result.skipped == 1
+        assert reads == [], f"transcript re-read for unchanged sessions: {reads}"
+
+        # Force sync still re-reads and re-indexes.
+        result = await indexer.sync(force=True)
+        assert result.indexed == 1
+
+        # After an update, the transcript is read again.
+        await storage.upsert_session(
+            SessionNode(
+                session_key=session.session_key,
+                session_id=session.session_id,
+                agent_id="main",
+                updated_at=1_700_000_000_001,
+            )
+        )
+        reads.clear()
+        result = await indexer.sync()
+        assert result.indexed == 1
+        assert reads == ["session-1"]
+    finally:
+        await store.close()
+        await storage.close()

@@ -942,3 +942,26 @@ async def test_apply_overflow_policy_not_invoked_without_channel_override() -> N
             pass
 
     task_runtime.apply_overflow_policy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_gracefully_handles_reservation_tokens() -> None:
+    """cancel_all() must not crash when the set contains opaque tokens (#1399).
+
+    Reservation tokens inserted by try_acquire() are object() instances
+    with no .cancel() method — the fix filters to asyncio.Task only.
+    """
+    ifs = _ChannelInFlightSet(cap=8)
+
+    # Insert a reservation token (as done in channel_dispatch.py line 850)
+    assert ifs.try_acquire(object())
+
+    # Also add a real task
+    t = asyncio.create_task(asyncio.sleep(60))
+    ifs.add(t)
+
+    # cancel_all must not raise AttributeError
+    await ifs.cancel_all()
+
+    # The real task should be cancelled
+    assert t.done()

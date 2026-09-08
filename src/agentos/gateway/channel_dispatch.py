@@ -188,8 +188,14 @@ class _ChannelInFlightSet:
         self._tasks.discard(token)  # type: ignore[arg-type]
 
     async def cancel_all(self) -> None:
-        """Cancel every in-flight task and await completion (for shutdown)."""
-        tasks = list(self._tasks)
+        """Cancel every in-flight task and await completion (for shutdown).
+
+        Reservation tokens (inserted by try_acquire) are opaque ``object()``
+        instances that lack a ``.cancel()`` method — filter to only
+        ``asyncio.Task`` instances so shutdown does not crash with
+        ``AttributeError`` (issue #1399).
+        """
+        tasks = [t for t in self._tasks if isinstance(t, asyncio.Task)]
         for t in tasks:
             t.cancel()
         if tasks:

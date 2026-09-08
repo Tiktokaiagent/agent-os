@@ -207,3 +207,34 @@ def test_mixed_ragged_rows_all_render_without_raw_pipes() -> None:
     assert "extra" not in rendered
     # No raw pipe characters.
     assert "|" not in rendered
+
+
+def test_telegram_markdown_does_not_format_markers_inside_link_urls() -> None:
+    """Markdown markers inside link URLs must not become HTML tags (#1435).
+
+    A URL containing double underscores, asterisks, or tildes was being
+    wrapped in <b>/<i>/<s> tags when the inline formatting regexes ran
+    over the already-rendered <a href="..."> tag, producing invalid HTML
+    that Telegram rejects with "Can't parse entities".
+    """
+    rendered = render_telegram_html("[test](https://example.com/foo__bar__baz)")
+    assert rendered == '<a href="https://example.com/foo__bar__baz">test</a>'
+
+    rendered = render_telegram_html("[test](https://example.com/foo*bar*baz)")
+    assert rendered == '<a href="https://example.com/foo*bar*baz">test</a>'
+
+    rendered = render_telegram_html("[test](https://example.com/foo~~bar~~baz)")
+    assert rendered == '<a href="https://example.com/foo~~bar~~baz">test</a>'
+
+
+def test_telegram_markdown_still_formats_link_text_and_bold_outside_links() -> None:
+    """Link text keeps inline formatting while URLs stay untouched (#1435)."""
+    rendered = render_telegram_html("[**bold**](https://example.com/x__y)")
+    assert rendered == '<a href="https://example.com/x__y"><b>bold</b></a>'
+
+    rendered = render_telegram_html(
+        "[test](https://example.com/foo__bar__baz) and **bold** text"
+    )
+    assert rendered == (
+        '<a href="https://example.com/foo__bar__baz">test</a> and <b>bold</b> text'
+    )

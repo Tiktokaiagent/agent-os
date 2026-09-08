@@ -43,11 +43,29 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
 def _render_inline(text: str) -> str:
     protected, code_chunks = _replace_code_spans(text)
     rendered = html.escape(protected)
-    rendered = _LINK_RE.sub(r'<a href="\2">\1</a>', rendered)
+
+    # Convert links first and stash just the URL so inline formatting
+    # regexes never touch characters inside href attributes (issue
+    # #1435: double underscores / asterisks / tildes in URLs were being
+    # wrapped in <b>/<i>/<s> tags, corrupting the HTML). Link text is
+    # left in place so it can still be formatted (e.g. [**bold**](url)).
+    url_placeholders: list[str] = []
+    def _protect_link(match: re.Match[str]) -> str:
+        placeholder = f"\x00TG_URL_{len(url_placeholders)}\x00"
+        url_placeholders.append(match.group(2))
+        return f'<a href="{placeholder}">{match.group(1)}</a>'
+
+    rendered = _LINK_RE.sub(_protect_link, rendered)
+
     rendered = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", rendered)
     rendered = re.sub(r"__(?=\S)(.+?)(?<=\S)__", r"<b>\1</b>", rendered)
     rendered = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", rendered)
     rendered = re.sub(r"(?<!\*)\*(?=\S)(.+?)(?<=\S)\*(?!\*)", r"<i>\1</i>", rendered)
+
+    # Restore protected URLs into their href attributes
+    for index, url in enumerate(url_placeholders):
+        rendered = rendered.replace(f"\x00TG_URL_{index}\x00", url)
+
     for index, chunk in enumerate(code_chunks):
         rendered = rendered.replace(f"\x00TG_CODE_{index}\x00", chunk)
     return rendered

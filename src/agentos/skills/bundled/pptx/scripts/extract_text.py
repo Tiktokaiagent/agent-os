@@ -47,16 +47,45 @@ def _load_python_pptx():
     return Presentation
 
 
+def _paragraph_text(para, *, join: str = "") -> str:
+    """Return a paragraph's full text.
+
+    Uses ``para.text`` (which includes text in runs that a ``run.text``
+    walk would miss, e.g. placeholder-level or non-run paragraph text)
+    instead of joining only ``para.runs`` (issue #1430).
+    """
+    para_text = getattr(para, "text", None)
+    if para_text is None:
+        para_text = "".join(run.text for run in para.runs)
+    return para_text.strip()
+
+
 def _shape_text(shape) -> list[str]:
     """Return non-empty paragraph strings from a shape's text frame."""
     if not getattr(shape, "has_text_frame", False):
         return []
     out: list[str] = []
     for para in shape.text_frame.paragraphs:
-        line = "".join(run.text for run in para.runs).strip()
+        line = _paragraph_text(para)
         if line:
             out.append(line)
     return out
+
+
+def _cell_text(cell) -> str:
+    """Return a table cell's text, preserving paragraph boundaries.
+
+    Paragraphs inside a cell are joined with a space so multi-paragraph
+    cells read as separate lines instead of being smushed together
+    ("Q1 Revenue(USD)" instead of "Q1 Revenue (USD)").
+    """
+    paragraphs = [p for p in cell.text_frame.paragraphs]
+    parts: list[str] = []
+    for para in paragraphs:
+        para_text = _paragraph_text(para)
+        if para_text:
+            parts.append(para_text)
+    return " ".join(parts)
 
 
 def _table_text(shape) -> list[str]:
@@ -65,14 +94,7 @@ def _table_text(shape) -> list[str]:
         return []
     out: list[str] = []
     for row in shape.table.rows:
-        cells = [
-            "".join(
-                run.text
-                for para in cell.text_frame.paragraphs
-                for run in para.runs
-            ).strip()
-            for cell in row.cells
-        ]
+        cells = [_cell_text(cell) for cell in row.cells]
         cells = [c for c in cells if c]
         if cells:
             out.append(" | ".join(cells))

@@ -455,8 +455,10 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
 
     Returns the new list of lines.
     """
-    # old_start is 1-indexed; convert to 0-indexed
-    pos = hunk.old_start - 1
+    # old_start is 1-indexed; convert to 0-indexed.
+    # old_start=0 means prepend to the beginning of the file
+    # (indices 0, not -1 — issue #1166).
+    pos = max(0, hunk.old_start - 1)
     result = list(file_lines)
 
     # Verify context and deleted lines match

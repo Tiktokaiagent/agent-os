@@ -574,3 +574,37 @@ def test_parse_hunk_header_rejects_malformed_input(header: str) -> None:
 
     with pytest.raises(ValueError, match="Invalid hunk header"):
         _parse_hunk_header(header)
+
+
+def test_apply_hunk_prepending_new_file_from_empty() -> None:
+    """A hunk with old_start=0 should prepend to an empty file (#1166)."""
+    from agentos.tools.builtin.patch import Hunk, _apply_hunk
+
+    hunk = Hunk(
+        old_start=0,
+        old_count=0,
+        new_start=1,
+        new_count=2,
+        lines=[
+            "+#!/usr/bin/env python3\n",
+            "+# new file\n",
+        ],
+    )
+    result = _apply_hunk([], hunk)
+    assert result == ["#!/usr/bin/env python3\n", "# new file\n"], f"Got: {result}"
+
+
+def test_apply_hunk_prepending_to_existing_content() -> None:
+    """A hunk with old_start=0 prepends, does not corrupt, existing lines."""
+    from agentos.tools.builtin.patch import Hunk, _apply_hunk
+
+    existing = ["existing = True\n"]
+    hunk = Hunk(
+        old_start=0,
+        old_count=0,
+        new_start=1,
+        new_count=1,
+        lines=["+line_before\n"],
+    )
+    result = _apply_hunk(existing, hunk)
+    assert result == ["line_before\n", "existing = True\n"], f"Got: {result}"

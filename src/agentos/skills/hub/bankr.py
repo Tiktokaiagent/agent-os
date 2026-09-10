@@ -321,11 +321,15 @@ class BankrSource(SkillSource):
                 loaded = await asyncio.gather(
                     *(_load_one(s) for s in self._allowlist),
                     *(_load_user(r) for r in self._user_refs),
+                    return_exceptions=True,
                 )
         except Exception as exc:
             log.warning("bankr.fetch_failed", error=str(exc))
             return None
 
+        # Filter out exception results from individual skill failures
+        if loaded:
+            loaded = [m for m in loaded if isinstance(m, SkillMeta) or m is None]
         metas = [m for m in loaded if m is not None]
         if not metas:
             # Every allowlisted skill failed to load (outage / rate limit) —

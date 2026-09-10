@@ -659,7 +659,7 @@ async def _wait_exec_process(proc: Any, timeout: float) -> bool:
     try:
         await asyncio.wait_for(proc.wait(), timeout=timeout)
         return True
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return proc.returncode is not None
 
 

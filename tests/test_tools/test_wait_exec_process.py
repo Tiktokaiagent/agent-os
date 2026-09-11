@@ -20,18 +20,18 @@ class _FakeProc:
 
 
 async def test_exits_immediately():
-    p = _Fake(exit_delay=0)
+    p = _FakeProc(exit_delay=0)
     assert await _wait_exec_process(p, timeout=5) is True
     assert p.returncode == 0
 
 
 async def test_timeout_returns_false():
-    p = _Fake(exit_delay=10)
+    p = _FakeProc(exit_delay=10)
     assert await _wait_exec_process(p, timeout=0.05) is False
     assert p.returncode is None
 
 
 async def test_already_exited():
-    p = _Fake(exit_delay=0)
+    p = _FakeProc(exit_delay=0)
     await p.wait()
     assert await _wait_exec_process(p, timeout=1) is True

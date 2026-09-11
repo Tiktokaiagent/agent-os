@@ -1056,7 +1056,7 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
             # Only one row is needed to test for emptiness — reading the full
             # history on every user message is O(n) and slows as chat grows.
             kw = {}
-            if _accepts_keyword_arg(get_transcript, "limit"):
+            if accepts_keyword_arg(get_transcript, "limit"):
                 kw["limit"] = 1
             fresh_user_session = not bool(await get_transcript(key, **kw))
         if raw_attachments:
